@@ -1,0 +1,33 @@
+[build-system]
+requires = ["hatchling>=1.25"]
+build-backend = "hatchling.build"
+
+[project]
+name = "distributed-worker"
+version = "0.1.0"
+description = "Opportunistic SETI@home-style worker for the distributed-gpu control plane"
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "MIT" }
+authors = [{ name = "dworker contributors" }]
+dependencies = [
+  # Reuses ControlPlaneClient, AgentRunner executors, and the pydantic
+  # contracts from the distributed-gpu control-plane package. Until that
+  # package is published, install it from a checkout or wheel first.
+  "distributed-gpu>=0.1.0",
+]
+
+[project.optional-dependencies]
+dev = [
+  "pytest>=8.3,<9",
+]
+
+[project.scripts]
+dworker = "dworker.cli:main"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/dworker"]
+
+[tool.pytest.ini_options]
+addopts = "-q"
+testpaths = ["tests"]

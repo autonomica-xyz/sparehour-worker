@@ -1,0 +1,22 @@
+# Example per-user systemd unit — preferred install for workstations, since
+# idle/lock detection reads your login session.
+#   mkdir -p ~/.config/systemd/user
+#   cp dworker.service ~/.config/systemd/user/
+#   systemctl --user daemon-reload && systemctl --user enable --now dworker
+# Enable lingering so it keeps running after logout:
+#   loginctl enable-linger $USER
+
+[Unit]
+Description=dworker — opportunistic distributed-gpu worker
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+# SETI@home mode lives in the config file (idle_only=true, idle_after_seconds=300)
+ExecStart=%h/.local/bin/dworker run
+Restart=always
+RestartSec=10
+
+[Install]
+WantedBy=default.target
