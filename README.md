@@ -1,268 +1,182 @@
-# distributed-worker (dworker)
+# dworker (distributed-worker)
 
-The worker side of [distributed-gpu](../distributed-gpu): a CLI + local web
-dashboard that turns any workstation or server into a SETI@home-style
-opportunistic compute node. Workers register their GPUs (NVIDIA or AMD) or
-spare CPU, advertise the capabilities you select, and claim jobs from the
-control plane whenever the machine has nothing better to do.
+`dworker` is the worker side of [Distributed
+GPU](https://github.com/autonomica-xyz/distributed-gpu): an open-source CLI
+and local dashboard that lets a workstation or server contribute spare
+NVIDIA, AMD, or CPU compute to a control plane — SETI@home-style, claiming
+independent jobs only when you tell it to. The controller (a separate,
+GPL-3.0-or-later package) defines trusted workload routes, stores jobs
+durably, and schedules at most one job per worker slot; `dworker`
+registers slots, advertises the capabilities you select, and runs the jobs
+it claims.
+
+![dworker local dashboard](assets/screenshots/worker-dashboard.png)
+
+*A local example worker with two CPU slots, active jobs, and workload eligibility.*
 
 ## What it does
 
-- **Credentials in, queues out** — `dworker login` stores the endpoint and
-  scoped agent token in a mode-0600 file; `doctor`/`queues`/dashboard show
-  every workload route the control plane offers and whether *this* machine
-  matches (vendor, VRAM, compute capability, GPU model, model packs,
-  labels), with the reason when it doesn't.
-- **Selection** — you pick which capabilities to advertise
-  (`dworker select demo-gpu`, or the Run/Stop buttons in the dashboard).
-  Toggles re-register live; running jobs are never interrupted.
-- **NVIDIA + AMD hosts** — NVIDIA slots come from `nvidia-smi`, AMD slots
-  from the amdgpu sysfs tree (no ROCm needed to *register*). Executing AMD
-  jobs additionally requires an accessible `/dev/kfd` and `/dev/dri`, plus a
-  stable GPU identity: the runner selects the device with
-  `ROCR_VISIBLE_DEVICES=<GPU-<16 hex>>` derived from sysfs `unique_id` (the
-  same UUID rocm-smi/rocminfo print) and passes `/dev/kfd` + `/dev/dri`
-  through to containers. A card without a nonzero `unique_id` keeps only a
-  `pci-<BDF>` identity — it stays discoverable for diagnostics, but the
-  runner refuses ROCm execution for it rather than guess a device ordinal.
-- **CPU-only spare compute** — `dworker config set cpu_slots=N` registers N
-  `vendor=cpu` slots so GPU-less boxes can serve `vendor: cpu` routes.
-  Reported cores/RAM are usable capacity — CPU affinity and cgroup v1/v2
-  cpu/memory limits cap the host-wide readings — and the N slots partition
-  host RAM so concurrent claims do not each advertise all of it.
-  `dworker run --cpu-slots M` overrides the count for that run only.
-- **Idle / screen-lock detection** — `idle_only=true` claims work only while
-  the machine is confirmed idle: all local interactive sessions locked, or
-  quiet past `idle_after_seconds` (default 300). Linux reads logind session
-  classes, `LockedHint`, and `IdleSinceHint`/`IdleSinceHintMonotonic`
-  timestamps (plus xprintidle for a reachable X display); macOS reads
-  `IOConsoleLocked` + `HIDIdleTime` via ioreg; Windows uses
-  GetLastInputInfo/GetTickCount + OpenInputDesktop. Only a *confirmed*
-  headless machine (logind answered and no local interactive session
-  exists, and no X11 timer) counts as idle; when the signal is missing or
-  ambiguous the probe **fails closed** — no claiming — so the worker never
-  steals cycles from a session it cannot see. A job that already started
-  always finishes.
-- **Model/image prefetch** — `dworker prefetch` (or the dashboard button)
-  docker-pulls every digest-pinned image behind your selected capabilities
-  and tells you what plugin model packs or local model servers a route
-  still needs. Prefetch is single-flight per run, each `docker pull` is
-  bounded (600 s default), and a worker stop cancels it instead of
-  stranding a pull.
-- **Dynamic workloads** — with `dynamic=true` and a token carrying
+- **Inventory** — detects NVIDIA GPUs via `nvidia-smi`, AMD GPUs via the
+  amdgpu sysfs tree, and configurable CPU slots (`cpu_slots=N`), and
+  reports usable cores/RAM after affinity and cgroup limits.
+- **Queue visibility** — `dworker doctor` and `dworker queues` show every
+  route the controller offers and whether this machine matches (vendor,
+  VRAM, compute capability, GPU model, model packs, labels), with the
+  reason when it does not.
+- **Explicit selection** — you choose what to advertise:
+  `dworker select translate-batch`, or the Run/Stop toggles in the
+  dashboard. Toggles re-register live; a running job always finishes.
+- **Idle gating** — with `idle_only=true` the worker claims only while the
+  machine is confirmed idle: all local sessions locked, or quiet past
+  `idle_after_seconds`. Detection reads logind/X11 on Linux,
+  `IOConsoleLocked`/`HIDIdleTime` on macOS, and `GetLastInputInfo` on
+  Windows. Ambiguous or missing signals fail closed — no new claiming.
+  Idle gating does not preempt jobs already running.
+- **Dynamic mode** — with `dynamic=true` and an agent token carrying
   `perms=dynamic`, the worker watches per-route queue depth and advertises
-  exactly the capabilities that have pending work, switching queues as
-  demand moves. (`perms=dynamic` grants only that depth signal; it does not
-  widen what the token may do.) Before the first claim — including a
-  `run --once` — one provisioning cycle runs synchronously. Demanded model
-  packs install into *every* target directory the routes name
-  (`ARGOS_MODEL_DIR` or the workload's family-specific `*_MODEL_DIR`, with a
-  `<workdir>/model-packs/<pack>` fallback), SHA-256-verified per file.
-  Verification identity comes from the `model_catalog` lock entry, or —
-  with no catalog configured — from the route's own identity pins, so
-  preinstalled packs still run but can never be downloaded without a
-  catalog. Provisioning never deletes data it did not create: a target
-  directory holding anything beyond the pack's own manifest-listed content
-  (or a symlinked path component) is refused and preserved. Dynamic
-  switching is runtime-only — it never rewrites your saved `capabilities`,
-  and CLI overrides like `--cpu-slots` never reach disk either; the file
-  keeps what the operator saved. The manager does not delete downloaded
-  packs; prune `model-packs/` manually if disk matters. Cancel/drain stops
-  the manager and prefetch immediately; running compute still drains.
-- **Dashboard** — `dworker run` serves a page on a **literal loopback
-  address only** (default `http://127.0.0.1:7788`; any other bind address
-  is rejected). Every `/api/*` call requires `Authorization: Bearer
-  <token>` where the token is a per-run secret unrelated to the
-  control-plane token, delivered to your browser in the URL fragment. The
-  full URL is written atomically, mode 0600, next to the config file as
-  `config.json.dashboard-url`, and printed only on an interactive TTY. Host
-  and Origin headers must match the bound origin, and request bodies are
-  strictly typed JSON (exact booleans/strings — no coercion). The status
-  snapshot it serves carries true succeeded/failed job counts from
-  confirmed controller outcomes.
+  exactly the capabilities that have pending work, downloading and
+  SHA-256-verifying demanded model packs before the first claim.
+- **Prefetch** — `dworker prefetch` docker-pulls the digest-pinned images
+  behind your selected capabilities and reports what model packs or local
+  model servers a route still needs.
+- **Dashboard** — during `dworker run`, a status page binds a **literal
+  loopback address only** (default `http://127.0.0.1:7788`); every `/api/*`
+  call needs a per-run bearer token delivered in the URL fragment and
+  stored mode-0600 in `config.json.dashboard-url`.
+
+## Requirements
+
+- Python 3.10 or newer. GPU drivers and inference runtimes are
+  platform-specific; Linux is recommended for GPU workers.
+- The separate `distributed-gpu` package, installed from source or a wheel.
+- For container routes, Docker and access to its daemon.
+- For AMD execution, a ROCm-capable runtime, accessible `/dev/kfd` and
+  `/dev/dri`, and a card with a nonzero sysfs `unique_id`.
+
+Install each route's executor, runtime and reviewed model packs before
+advertising it. ML dependencies and weights are not part of the base worker
+install. The controller's [workload guide](https://github.com/autonomica-xyz/distributed-gpu/blob/main/workloads/README.md)
+and [runtime profiles](https://github.com/autonomica-xyz/distributed-gpu/tree/main/deploy)
+describe those prerequisites. Bundled ML routes target NVIDIA; AMD and CPU
+capacity need compatible routes configured by your controller operator.
 
 ## Install
 
-The worker reuses the control plane's client and executor machinery, so
-install that package first (from your controller checkout or its wheel).
-
-Canonical service install (matches `deploy/dworker.service`):
+Both packages install from source. The worker depends on the control-plane
+package, so install that first:
 
 ```bash
+git clone https://github.com/autonomica-xyz/distributed-gpu.git
+git clone https://github.com/autonomica-xyz/distributed-worker.git
 python3 -m venv ~/.local/share/dworker/venv
-~/.local/share/dworker/venv/bin/pip install /path/to/distributed-gpu   # or its wheel from dist/
-~/.local/share/dworker/venv/bin/pip install /path/to/distributed-worker
+~/.local/share/dworker/venv/bin/pip install ./distributed-gpu ./distributed-worker
+export PATH="$HOME/.local/share/dworker/venv/bin:$PATH"
 ```
 
-Development install (separate, activated environment):
+For always-on hosts, [`deploy/dworker.service`](deploy/dworker.service) is
+an example per-user systemd unit matching this installation. Follow its
+session-environment and lingering instructions for workstation idle detection.
+
+## First run
+
+From the controller checkout, issue an agent token using the same controller
+database as the running service. Scope it to the intended workloads; repeat
+`--scope` per value. Never give a worker an admin or client token.
 
 ```bash
-python3 -m venv .venv && . .venv/bin/activate
-pip install /path/to/distributed-gpu
-pip install -e '.[dev]'
-pytest
+umask 077
+mkdir -p state
+.venv/bin/dgpu token --role agent --subject tower-a \
+    --scope routes=translate-batch --expires-hours 720 > state/tower-a.token
 ```
 
-## First run on a host
+Transfer that file privately to the worker host as `token.txt`. Replace the
+example endpoint below with your controller's HTTPS address.
+
+Then on the worker host:
 
 ```bash
-# On the controller: issue a least-privilege, per-agent scoped token.
-# Repeat --scope per value (never CSV); cap it to the routes you select and
-# give it an expiry.
-#   dgpu token --role agent --subject tower-a \
-#       --scope routes=demo-gpu --expires-hours 720
-# Never hand the worker an admin or client token: the control plane decides
-# which executor each route runs, and an agent token only registers slots
-# and claims work for its subject and scoped capabilities.
-
-dworker login --endpoint https://gpu-control.example.com --token-file token.txt --agent-id tower-a
-dworker doctor                 # hardware, token, idle detection, queue matrix
-dworker select demo-gpu        # advertise the capability
-dworker run                    # claim loop + dashboard on 127.0.0.1:7788
+dworker login --endpoint https://gpu-control.example.com \
+    --token-file token.txt --agent-id tower-a
+dworker doctor                       # hardware, token, idle probe, queue matrix
+dworker select translate-batch       # advertise a capability
+dworker run                          # claim loop + dashboard on 127.0.0.1:7788
 ```
 
-SETI@home mode (only when the machine is confirmed idle/locked):
+Open the full dashboard access URL printed in an interactive terminal, or
+read it from `~/.config/dworker/config.json.dashboard-url`. Its private
+per-run token is separate from the controller credential; do not share the
+URL. The plain localhost URL alone does not authenticate a browser.
+
+Useful variations:
 
 ```bash
-dworker config set idle_only=true
+dworker config set idle_only=true        # claim only while confirmed idle
 dworker config set idle_after_seconds=600
+dworker config set cpu_slots=4           # GPU-less box serving vendor=cpu routes
+dworker run --cpu-slots 2                # one-run override, nothing saved
+dworker run --once                       # smoke test: one job per slot, then exit
 ```
 
-Dynamic workloads (queue-depth-driven selection):
+Dynamic (queue-driven) selection needs the depth signal on the token
+(`--scope perms=dynamic`) plus `dworker config set dynamic=true` and a
+`model_catalog` pointing at a lock catalog (local file or HTTPS URL) in the
+controller's `models/*.lock.json` format; install the `[models]` extra for
+Hugging Face pack downloads.
 
-```bash
-# On the controller: grant the depth signal on the same agent token —
-# repeat --scope, do not comma-join values.
-dgpu token --role agent --subject tower-a \
-    --scope routes=demo-gpu --scope routes=demo-cpu \
-    --scope perms=dynamic --expires-hours 720
-# On the worker:
-dworker login --endpoint https://gpu-control.example.com --token-file token.txt
-dworker config set dynamic=true
-dworker config set model_catalog=https://gpu-control.example.com/locks/argos-popular.json
-dworker run
-```
+## Security and trust limits
 
-The lock catalog is the control plane's `models/*.lock.json` format
-(`{"models": [...]}`) — serve it over HTTPS or point at a local file; HTTP
-URLs and URLs carrying credentials are refused. Argos entries pin an archive
-URL and SHA-256; Hugging Face entries use `format: "huggingface"`, `model_id`,
-an immutable 40-hex `revision`, and reviewed `allow_patterns`. Provisioning
-checks the source file identities and writes a per-file SHA-256 manifest.
-Install the `[models]` extra for Hugging Face provisioning; the large inference
-runtimes remain separate, pinned profiles under
-[`distributed-gpu/deploy`](../distributed-gpu/deploy).
-
-Model packs install into the family-specific directory named by the route
-(`ARGOS_MODEL_DIR`, `SDXL_MODEL_DIR`, `PARAKEET_MODEL_DIR`,
-`WHISPERX_MODEL_DIR`, alignment/diarization directories, or `VLLM_MODEL_DIR`)
-— make that parent writable by the worker user — or into
-`<workdir>/model-packs/<pack>` when no directory is pinned. Plugin routes
-whose handler module isn't installed are skipped; packs that are neither in
-the catalog nor already pin-verified on disk are skipped too; both show up
-in the notes.
-
-LibreTranslate and vLLM are operator-started, loopback-only model services;
-dynamic mode checks readiness but does not create a service daemon. Provision
-the fixed Qwen pack before starting vLLM, then enable its sleep/wake profile
-from [`deploy/llm/requirements.txt`](../distributed-gpu/deploy/llm/requirements.txt).
-The worker retains warm plugin instances, releases GPU models on handler
-switches, and drains after a failed release rather than allocating the next
-model beside one whose memory ownership is uncertain.
-
-Smoke test one job per slot then exit: `dworker run --once`. Dynamic mode
-provisions before the first claim, so `--once` sees real demand.
-
-For always-on servers, see `deploy/dworker.service`.
-
-## Connecting to a public controller
-
-- **Endpoint must be HTTPS.** `dworker login` and the config loader reject
-  non-HTTPS endpoints except loopback (`localhost`, `127.0.0.0/8`, `::1`),
-  which is allowed for local development. TLS verification is never
-  disabled; to trust a private CA set `SSL_CERT_FILE`/`SSL_CERT_DIR`.
-  The controller bearer transport ignores ambient proxy and netrc settings;
-  model downloads never receive the controller token.
-- **Terminate TLS where the controller runs.** A reverse proxy
-  (nginx/Caddy/Apache or a cloud LB) terminating TLS and forwarding to the
-  controller is the normal deployment; the worker only needs the public
-  `https://` origin. Keep firewall rules tight: expose only the controller
-  port, not the worker — the worker makes outbound calls only.
-- **Least-privilege tokens.** Issue one token per agent `--subject`, repeat
-  `--scope routes=CAPABILITY` for each advertised capability, add
-  `--scope perms=dynamic` only if the host runs dynamic mode, and set
-  `--expires-hours`. Rotate with `dgpu revoke-token`. Worker tokens are
-  never admin tokens.
-- **Executor trust.** The controller registry chooses trusted commands,
-  plugin handlers, and digest-pinned container images; job submitters do not
-  choose executors. Commands and plugins are local code, not sandboxed by
-  this worker. Treat the controller and registry as code authority with the
-  worker user's privileges.
-- **Dashboard stays local.** The dashboard binds literal loopback only,
-  and its bearer token is a separate per-run secret stored in the
-  mode-0600 `config.json.dashboard-url` file. It is not a remote
-  management surface; do not proxy or expose it.
+- The endpoint must be HTTPS; only loopback endpoints are exempt. TLS
+  verification is never disabled (use `SSL_CERT_FILE`/`SSL_CERT_DIR` for a
+  private CA), and model downloads never receive the controller token.
+- The controller and its workload registry are the code authority:
+  executors are trusted commands, plugin handlers, or digest-pinned
+  container images chosen by the registry — job submitters cannot pick
+  executors or inject code/models. Run the worker under a user whose
+  privileges you are comfortable granting the controller operator.
+- The dashboard is not a remote management surface: literal loopback bind,
+  per-run token, strict origin checks. Do not proxy or expose it.
+- Provider credentials (Vast, Salad, …) live on the controller and are
+  never sent to workers.
+- One job per slot: a host with N registered slots runs at most N
+  independent jobs concurrently — this is not multi-GPU training or model
+  sharding.
+- Fixed local model services (LibreTranslate, vLLM) are operator-started
+  loopback services; the worker checks readiness but does not daemonize
+  them, and one fixed endpoint must not be advertised as backed by
+  several GPU slots.
 
 ## Commands
 
 | command | purpose |
 |---------|---------|
-| `login` | store endpoint + agent token (config file is mode 0600; `config` output redacts the token) |
+| `login` | store endpoint + agent token (config is mode 0600; `config` redacts it) |
 | `doctor` | connectivity, hardware, token, idle probe, queue match table |
 | `queues` | just the queue matrix |
-| `select` / `deselect CAP…` | toggle advertised capabilities (live) |
+| `select` / `deselect` | toggle advertised capabilities (live) |
 | `prefetch` | docker-pull images for selected capabilities |
 | `run` | the worker loop (`--once`, `--idle-only`, `--idle-after`, `--cpu-slots`, `--no-dashboard`) |
-| `config` | get/set any setting (`config set cpu_slots=4`) |
+| `config` | get/set settings (`config set cpu_slots=4`); file: `~/.config/dworker/config.json` |
 
-## Configuration
-
-`~/.config/dworker/config.json` (override with `--config` or
-`DWORKER_CONFIG`). Saves are validated, atomic (temp file + rename), and
-mode 0600. Values are typed: booleans accept only
-true/false/yes/no/on/off/1/0, integers are range-checked, `labels` must be
-a string→string map — malformed values are rejected, not coerced.
-
-| key | default | meaning |
-|-----|---------|---------|
-| `endpoint`, `token`, `agent_id` | — | control plane access |
-| `provider` | `local` | provider label reported to the control plane |
-| `capabilities` | `[]` | advertised capabilities; empty claims nothing |
-| `model_packs` | `[]` | model packs installed on this host |
-| `labels` | `{}` | placement labels (agent + slots) |
-| `cpu_slots` | `0` | synthetic `vendor=cpu` slots (RAM is partitioned across them) |
-| `idle_only` | `false` | only claim while confirmed idle/locked |
-| `idle_after_seconds` | `300` | idle threshold |
-| `dynamic` | `false` | queue-depth-driven capability switching (needs `perms=dynamic` token) |
-| `dynamic_poll_seconds` | `60` | how often the dynamic manager re-checks depth |
-| `model_catalog` | `""` | lock catalog (local file or HTTPS URL) for model-pack downloads |
-| `workdir` | `~/.local/state/dworker/work` | job working directories and pack fallback |
-| `dashboard` | `true` | serve the dashboard during `run` |
-| `dashboard_host` / `dashboard_port` | `127.0.0.1` / `7788` | dashboard bind — literal loopback only |
-| `poll_seconds`, `heartbeat_seconds`, `lease_seconds` | `1` / `15` / `90` | control-plane loop timings |
+Key config keys: `capabilities` (empty claims nothing), `cpu_slots`,
+`idle_only`, `idle_after_seconds`, `dynamic`, `model_catalog`, `workdir`,
+`labels` (string→string placement labels), `dashboard_host`,
+`dashboard_port`, `poll_seconds`, `heartbeat_seconds`, and `lease_seconds`.
 
 ## Known ceilings
 
-- AMD execution requires `/dev/kfd` and `/dev/dri` accessible by the
-  worker user and a card with a nonzero sysfs `unique_id`; otherwise amd
-  slots register but cannot run ROCm work.
-- Idle detection fails closed: a session it cannot classify, or a platform
-  with no signal at all, means "not idle". Unconfirmed machines never look
-  idle — `idle_only` on an unrecognized setup simply claims nothing until
-  you fix detection or disable `idle_only`.
-- Capabilities are per-host, not per-GPU; a host advertises the same set on
-  every slot (same as the controller's own agent).
-  A fixed LibreTranslate/vLLM endpoint is not a per-GPU server pool: expose
-  only its GPU to that worker (for example, a one-GPU worker container).
-  Do not advertise one service as independently backed by several GPU slots.
-- Dynamic mode is runtime-only selection: it does not rewrite the saved
-  `capabilities` config, and the first container job for a newly demanded
-  capability pays the image pull (subsequent jobs hit the docker cache).
+- Capabilities are per-host, not per-GPU: a host advertises the same set
+  on every slot.
+- Idle detection fails closed: an unclassifiable session or a platform
+  with no signal means "not idle" — `idle_only` then simply claims
+  nothing.
+- Dynamic selection never rewrites your saved capabilities. Downloaded
+  model packs remain on disk until you prune them; container images are
+  cached by Docker after the first pull.
 
 ## License
 
-MIT — see [LICENSE](LICENSE). Note: this worker depends on the
-[distributed-gpu](../distributed-gpu) control-plane package, which is
-GPL-3.0-or-later and is distributed separately — its license is unchanged
-by this project's license, and it must be available (checkout or wheel)
-until it is published.
+MIT — see [LICENSE](LICENSE). This worker depends on the `distributed-gpu`
+control-plane package, which is **GPL-3.0-or-later** and distributed
+separately; installing this worker alongside it does not change its
+license.
