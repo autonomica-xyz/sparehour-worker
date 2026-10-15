@@ -14,6 +14,15 @@ it claims.
 
 *A local example worker with two CPU slots, active jobs, and workload eligibility.*
 
+## Demo video
+
+[Watch the 60-second dworker demonstration](assets/videos/worker-demo.mp4):
+real GPU inventory, workload selection, pause/resume, and a dispatched image
+job returning its result. Captioned and edited for length; runtime and model
+weights are provisioned separately.
+
+[Poster, subtitles, and sharing guide](assets/videos/README.md).
+
 ## What it does
 
 - **Inventory** — detects NVIDIA GPUs via `nvidia-smi`, AMD GPUs via the
