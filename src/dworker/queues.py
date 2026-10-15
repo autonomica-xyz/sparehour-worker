@@ -9,18 +9,46 @@ from __future__ import annotations
 from fnmatch import fnmatch
 from typing import Any
 
-from gpu_orchestrator.agent import ControlPlaneClient
+from gpu_orchestrator.agent import AgentError, ControlPlaneClient
 
 
 def fetch_workloads(client: ControlPlaneClient) -> list[dict[str, Any]]:
+    """GET /v1/workloads through the sanitized, status-only error boundary.
+
+    The response is read via ``client.client`` directly (there is no upstream
+    method for it), but errors must not follow upstream's body-echoing
+    ``_json``: an error body can carry secrets or injected text, and it
+    reaches the CLI and dynamic-mode status notes verbatim. Only the HTTP
+    status and a shape classification are reported — never the body, which
+    is also never quoted into the exception (``from None`` so a decode error
+    carrying body text cannot chain out either).
+    """
     response = client.client.get("/v1/workloads")
-    if response.status_code >= 300:
-        raise RuntimeError(f"workload listing failed: HTTP {response.status_code}: {response.text[:200]}")
-    return response.json()
+    if response.status_code < 200 or response.status_code >= 300:
+        raise AgentError(f"workload listing failed: HTTP {response.status_code}")
+    if response.status_code == 204:
+        return []
+    try:
+        payload = response.json()
+    except ValueError:
+        raise AgentError("workload listing failed: malformed JSON response") from None
+    if payload is None:
+        return []
+    if not isinstance(payload, list) or not all(
+        isinstance(workload, dict) and isinstance(workload.get("name"), str)
+        for workload in payload
+    ):
+        raise AgentError("workload listing failed: unexpected response shape")
+    return payload
 
 
 def expand_queues(workloads: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    """Flatten workloads into one row per route (a route == a queue)."""
+    """Flatten workloads into one row per route (a route == a queue).
+
+    `pending_jobs` is None when the token cannot see queue depths (no
+    `perms=dynamic` scope); `environment` is the route's executor environment
+    (model-pack install dir and archive hash live there).
+    """
     queues: list[dict[str, Any]] = []
     for workload in workloads:
         for route_name, route in (workload.get("routes") or {}).items():
@@ -37,6 +65,9 @@ def expand_queues(workloads: list[dict[str, Any]]) -> list[dict[str, Any]]:
                     "resources": route.get("resources") or {},
                     "executor_type": executor.get("type", ""),
                     "executor_detail": _executor_detail(executor),
+                    "executor_environment": dict(executor.get("environment") or {}),
+                    "inputs": list(workload.get("inputs") or []),
+                    "pending_jobs": route.get("pending_jobs"),
                 }
             )
     return sorted(queues, key=lambda queue: (queue["workload"], queue["route"]))
@@ -71,13 +102,27 @@ def route_matches(
     host: dict[str, Any],
     agent_labels: dict[str, str],
 ) -> tuple[bool, str]:
-    """(ok, failing-reason) for one slot against one route's requirements."""
+    """(ok, failing-reason) for one slot against one route's requirements.
+
+    Mirrors the control plane's ``_slot_matches``: multi-GPU requirements
+    are never matched (the agent model is one GPU per job), and an ``amd``
+    route additionally requires the host's ROCm device nodes when the host
+    dict reports them (``rocm_kfd``/``rocm_dri`` absent = unknown = allowed).
+    """
+    gpu_count = requirements.get("gpu_count", 1)
+    if int(gpu_count if gpu_count is not None else 1) != 1:
+        return False, f"requires gpu_count={gpu_count} (multi-GPU routes unsupported)"
     capability = requirements.get("capability")
     if capability and capability not in set(slot.get("capabilities") or []):
         return False, f"capability {capability!r} not selected"
     vendor = str(requirements.get("vendor") or "").casefold()
     if vendor != str(slot.get("vendor", "")).casefold():
         return False, f"wants {vendor!r} GPU, slot is {slot.get('vendor')!r}"
+    if vendor == "amd":
+        if host.get("rocm_kfd") is False:
+            return False, "AMD route needs ROCm device nodes (/dev/kfd missing)"
+        if str(slot.get("gpu_uuid", "")).startswith("pci-"):
+            return False, "AMD slot lacks a stable GPU UUID for ROCr selection"
     if int(slot.get("vram_mb", 0)) < int(requirements.get("min_vram_mb") or 0):
         return (
             False,

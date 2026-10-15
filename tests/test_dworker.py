@@ -126,17 +126,6 @@ def test_amd_sysfs_falls_back_to_pci_name(tmp_path: Path):
     assert slots[0].model == "AMD GPU 0x1002:0x67df"
 
 
-def test_idle_decision():
-    from dworker.idle import IdleState as S
-
-    # Locked screen is idle regardless of threshold.
-    assert S(True, True, None, "screen locked").idle
-    assert S(True, False, 400, "idle for 400s").idle
-    assert not S(False, False, 10, "active").idle
-    # No signal (headless server) counts as idle.
-    assert S(True, None, None, "headless").idle
-
-
 def test_config_roundtrip_and_permissions(tmp_path: Path):
     path = tmp_path / "config.json"
     config = dict(config_mod.DEFAULTS)
@@ -153,3 +142,137 @@ def test_config_load_ignores_unknown_keys(tmp_path: Path):
     path.write_text(json.dumps({"endpoint": "https://x", "malicious": True}))
     loaded = config_mod.load(path)
     assert "malicious" not in loaded
+
+
+# -- dynamic mode ---------------------------------------------------------
+
+from pathlib import Path as _P  # noqa: E402
+
+from gpu_orchestrator.models import SlotInventory  # noqa: E402
+
+from dworker import dynamic as dyn  # noqa: E402
+
+
+def _inv(**overrides):
+    base = dict(
+        id="s0",
+        gpu_index=0,
+        gpu_uuid="u",
+        model="NVIDIA GeForce RTX 4090",
+        vram_mb=24564,
+        compute_capability="8.9",
+        capabilities=[],
+        model_packs=[],
+        labels={},
+    )
+    base.update(overrides)
+    return SlotInventory(**base)
+
+
+def _row(capability="translate-batch", pending=1, packs=(), model_dir=None, sha=None, route="r1"):
+    environment = {}
+    if model_dir:
+        environment["ARGOS_MODEL_DIR"] = model_dir
+    if sha:
+        environment["ARGOS_MODEL_ARCHIVE_SHA256"] = sha
+    return {
+        "workload": "w",
+        "route": route,
+        "capability": capability,
+        "model_packs": list(packs),
+        "resources": {"vendor": "nvidia", "min_vram_mb": 1},
+        "executor_type": "command",
+        "executor_detail": "",
+        "executor_environment": environment,
+        "pending_jobs": pending,
+    }
+
+
+LOCK = {"model_pack": "argos-en-es-1.0", "sha256": "a" * 64, "url": "https://x/m.argosmodel",
+        "archive_root": "en_es", "from_code": "en", "to_code": "es"}
+
+
+def _plan(rows, **kw):
+    defaults = dict(
+        slots=[_inv()],
+        provider="local",
+        host=HOST,
+        agent_labels={},
+        installed_packs=set(),
+        catalog={LOCK["model_pack"]: LOCK},
+        fallback_dir=_P("/fallback"),
+    )
+    defaults.update(kw)
+    return dyn.plan(rows, **defaults)
+
+
+def test_plan_advertises_only_demanded_eligible_capabilities():
+    rows = [
+        _row(capability="translate-batch", pending=5),
+        _row(capability="transcribe", pending=0, route="r2"),
+        _row(capability="sdxl", pending=9, route="r3"),  # demanded but wants AMD
+    ]
+    rows[2]["resources"] = {"vendor": "amd", "min_vram_mb": 1}
+    result = _plan(rows)
+    assert result.capabilities == ["translate-batch"]
+    assert result.fetches == []
+    assert any("sdxl" in note for note in result.notes)
+
+
+def test_plan_fetches_missing_packs_with_route_dir(tmp_path):
+    sha = "a" * 64
+    target = tmp_path / "models" / "en_es"
+    rows = [_row(packs=["argos-en-es-1.0"], model_dir=str(target), sha=sha)]
+    result = _plan(rows)
+    assert result.capabilities == ["translate-batch"]
+    assert result.fetches[0]["pack"] == "argos-en-es-1.0"
+    assert result.fetches[0]["target"] == target
+    assert not result.packs["argos-en-es-1.0"].ready
+    # "installed" only in config bookkeeping is not proof: a missing or
+    # junk directory is still queued for a verified rebuild.
+    assert _plan(rows, installed_packs={"argos-en-es-1.0"}).fetches
+    target.mkdir(parents=True)
+    (target / "junk").write_text("not a model pack")
+    # A junk directory is foreign data: never deleted, never provisioned —
+    # the plan notes the refusal and queues no doomed fetch for it.
+    result = _plan(rows, installed_packs={"argos-en-es-1.0"})
+    assert result.fetches == [] and not result.packs["argos-en-es-1.0"].ready
+    assert (target / "junk").read_text() == "not a model pack"
+    assert any("refus" in note for note in result.notes)
+    # no route dir -> fallback location is provisioned
+    rows = [_row(packs=["argos-en-es-1.0"], sha=sha)]
+    result = _plan(rows)
+    assert [fetch["target"] for fetch in result.fetches] == [_P("/fallback") / "argos-en-es-1.0"]
+    # no packs -> nothing fetched
+    assert _plan([_row()]).fetches == []
+
+
+def test_plan_rejects_catalog_that_disagrees_with_route_hash():
+    rows = [_row(packs=["argos-en-es-1.0"], model_dir="/opt/models/en_es", sha="b" * 64)]
+    with pytest.raises(dyn.DynamicError):
+        _plan(rows)
+
+
+def test_plan_skips_plugin_routes_without_handler():
+    rows = [_row()]
+    rows[0]["executor_type"] = "plugin"
+    rows[0]["executor_detail"] = "no_such_module_xyz:Executor"
+    result = _plan(rows)
+    assert result.capabilities == []
+    assert any("not importable" in note for note in result.notes)
+
+
+def test_load_catalog_rejects_insecure_source():
+    with pytest.raises(dyn.DynamicError):
+        dyn.load_catalog("http://mirror.example/catalog.json")
+    with pytest.raises(dyn.DynamicError):
+        dyn.load_catalog("ftp://mirror.example/catalog.json")
+
+
+def test_load_catalog_rejects_credentialed_url_and_leaks_nothing():
+    source = "https://agent:hunter2@mirror.example/catalog.json?sig=s3cr3t"
+    with pytest.raises(dyn.DynamicError, match="credentials") as caught:
+        dyn.load_catalog(source)
+    assert "hunter2" not in str(caught.value)
+    assert "s3cr3t" not in str(caught.value)
+

@@ -1,10 +1,29 @@
 # Example per-user systemd unit — preferred install for workstations, since
-# idle/lock detection reads your login session.
+# idle/lock detection reads your login session via logind.
+#
+# Install the package into the canonical venv first:
+#   python3 -m venv ~/.local/share/dworker/venv
+#   ~/.local/share/dworker/venv/bin/pip install /path/to/distributed-gpu
+#   ~/.local/share/dworker/venv/bin/pip install /path/to/distributed-worker
+# Then install this unit:
 #   mkdir -p ~/.config/systemd/user
 #   cp dworker.service ~/.config/systemd/user/
 #   systemctl --user daemon-reload && systemctl --user enable --now dworker
 # Enable lingering so it keeps running after logout:
 #   loginctl enable-linger $USER
+#
+# Idle detection reads DISPLAY/XAUTHORITY from your login session. Inside a
+# graphical session, import them so the unit sees X11 input state:
+#   systemctl --user import-environment DISPLAY XAUTHORITY
+#   systemctl --user restart dworker
+# Some desktop environments import these variables automatically. Re-import
+# them after the display changes; without them logind still works, but the
+# X11 input timer is unavailable.
+#
+# The dashboard binds literal loopback only (default 127.0.0.1:7788) and its
+# per-run access URL is written mode 0600 to
+# ~/.config/dworker/config.json.dashboard-url — it is never exposed on
+# 0.0.0.0 and must not be proxied off the host.
 
 [Unit]
 Description=dworker — opportunistic distributed-gpu worker
@@ -14,9 +33,13 @@ Wants=network-online.target
 [Service]
 Type=simple
 # SETI@home mode lives in the config file (idle_only=true, idle_after_seconds=300)
-ExecStart=%h/.local/bin/dworker run
+ExecStart=%h/.local/share/dworker/venv/bin/dworker run
 Restart=always
 RestartSec=10
+# Jobs always finish once started; shutdown only stops new claims, drains the
+# dynamic manager/prefetch, and waits for running compute. Never let systemd
+# SIGKILL a draining job — give the stop unlimited time.
+TimeoutStopSec=infinity
 
 [Install]
 WantedBy=default.target

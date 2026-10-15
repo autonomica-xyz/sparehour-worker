@@ -12,12 +12,21 @@ license = { text = "MIT" }
 authors = [{ name = "dworker contributors" }]
 dependencies = [
   # Reuses ControlPlaneClient, AgentRunner executors, and the pydantic
-  # contracts from the distributed-gpu control-plane package. Until that
-  # package is published, install it from a checkout or wheel first.
-  "distributed-gpu>=0.1.0",
+  # contracts from the distributed-gpu control-plane package. Compatibility
+  # is tested against the 0.1 release line; until the package is published,
+  # install it from a checkout or wheel first.
+  "distributed-gpu>=0.1.0,<0.2",
+  # Direct imports in dworker.client: httpx for the controller transport,
+  # certifi for the default CA roots (SSL_CERT_FILE/SSL_CERT_DIR override).
+  # Bounds match the environments supported by the control plane.
+  "httpx>=0.27,<1",
+  "certifi>=2024.2.2",
 ]
 
 [project.optional-dependencies]
+models = [
+  "distributed-gpu[models]>=0.1.0,<0.2",
+]
 dev = [
   "pytest>=8.3,<9",
 ]
@@ -26,6 +35,8 @@ dev = [
 dworker = "dworker.cli:main"
 
 [tool.hatch.build.targets.wheel]
+# Hatch ships everything under src/dworker, including the dashboard.html
+# page data served by dworker.dashboard — keep it inside the package.
 packages = ["src/dworker"]
 
 [tool.pytest.ini_options]

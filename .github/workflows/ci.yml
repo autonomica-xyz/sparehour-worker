@@ -1,0 +1,139 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: tests (Python ${{ matrix.python }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python: ["3.10", "3.12"]
+    env:
+      # Pinned control-plane revision (upstream source provenance).
+      CONTROLLER_REPO: autonomica-xyz/distributed-gpu
+      CONTROLLER_REF: a79b927053bc54c06d0e725f0a04841ac0c30355
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          path: worker
+
+      # The control-plane package is not published; build and test against
+      # the pinned upstream revision checked out into a separate path.
+      # If the repository is private, define a PAT with read access in the
+      # UPSTREAM_CHECKOUT_TOKEN Actions secret; public checkouts use the
+      # built-in GITHUB_TOKEN. No credentials are echoed or persisted beyond
+      # the checkout itself.
+      - name: Check out controller (pinned revision)
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ env.CONTROLLER_REPO }}
+          ref: ${{ env.CONTROLLER_REF }}
+          path: controller
+          persist-credentials: false
+          token: ${{ secrets.UPSTREAM_CHECKOUT_TOKEN || github.token }}
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+          cache: pip
+
+      - name: Install worker and controller
+        working-directory: worker
+        run: |
+          python -m pip install --upgrade pip
+          # No [dev] extra on the controller: its dev extra requires
+          # pytest>=9, which conflicts with the worker's pytest>=8.3,<9.
+          python -m pip install ../controller
+          python -m pip install -e '.[dev]'
+          python -m pip install build
+
+      - name: Run test suite
+        working-directory: worker
+        run: python -m pytest
+
+      - name: Build wheel
+        working-directory: worker
+        run: python -m build --wheel --outdir "$RUNNER_TEMP/dist"
+
+      - name: Wheel install smoke (isolated venv)
+        env:
+          VENV: ${{ runner.temp }}/smoke-venv
+        run: |
+          python -m venv "$VENV"
+          "$VENV/bin/python" -m pip install --upgrade pip
+          # Controller installed from the pinned source checkout, worker
+          # strictly from the built wheel — never the editable checkout.
+          "$VENV/bin/python" -m pip install ./controller
+          "$VENV/bin/python" -m pip install "$RUNNER_TEMP"/dist/distributed_worker-*.whl
+          cd "$RUNNER_TEMP"
+          "$VENV/bin/dworker" --version
+          "$VENV/bin/python" - <<'PY'
+          import http.client
+          import threading
+          from importlib import resources
+
+          from dworker import dashboard
+
+          # Packaged resource must be present in the installed wheel.
+          html = resources.files("dworker").joinpath("dashboard.html").read_text(
+              encoding="utf-8"
+          )
+          assert "<" in html, "dashboard.html missing from wheel"
+
+          server = dashboard.make_server(
+              status_provider=lambda: {"ok": True, "paused": False},
+              pause_handler=lambda paused: None,
+              select_handler=lambda cap, sel: (True, "ok"),
+              prefetch_handler=lambda: None,
+              host="127.0.0.1",
+              port=0,
+          )
+          thread = threading.Thread(target=server.serve_forever, daemon=True)
+          thread.start()
+          port = server.server_port
+          token = server.dashboard_url.rsplit("#", 1)[-1]
+          try:
+              conn = http.client.HTTPConnection("127.0.0.1", port, timeout=10)
+              conn.request("GET", "/", headers={"Host": f"127.0.0.1:{port}"})
+              resp = conn.getresponse()
+              body = resp.read()
+              assert resp.status == 200, resp.status
+              assert body == html.encode("utf-8"), "served HTML != packaged resource"
+              conn.close()
+
+              conn = http.client.HTTPConnection("127.0.0.1", port, timeout=10)
+              conn.request(
+                  "GET", "/api/status", headers={"Host": f"127.0.0.1:{port}"}
+              )
+              resp = conn.getresponse()
+              assert resp.status == 401, resp.status
+              resp.read()
+              conn.close()
+
+              conn = http.client.HTTPConnection("127.0.0.1", port, timeout=10)
+              conn.request(
+                  "GET",
+                  "/api/status",
+                  headers={
+                      "Host": f"127.0.0.1:{port}",
+                      "Authorization": f"Bearer {token}",
+                  },
+              )
+              resp = conn.getresponse()
+              assert resp.status == 200, resp.status
+              assert b'"ok": true' in resp.read()
+              conn.close()
+          finally:
+              server.shutdown()
+              server.server_close()
+              thread.join(timeout=10)
+          print("wheel smoke: dashboard HTML served over real HTTP")
+          PY
