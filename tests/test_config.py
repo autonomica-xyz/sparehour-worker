@@ -1,4 +1,4 @@
-"""Regression tests for dworker.config: validation, coercion, endpoint
+"""Regression tests for sparehour_worker.config: validation, coercion, endpoint
 policy, and atomic private persistence. All offline, tmp-path based."""
 
 from __future__ import annotations
@@ -10,8 +10,8 @@ from pathlib import Path
 
 import pytest
 
-from dworker import config as config_mod
-from dworker.config import ConfigError
+from sparehour_worker import config as config_mod
+from sparehour_worker.config import ConfigError
 
 
 def _config(**overrides):

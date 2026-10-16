@@ -10,7 +10,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from dworker import hardware
+from sparehour_worker import hardware
 
 
 def _add_gpu(root: Path, bdf: str, *, unique_id: str | None = None, vram_gb: int = 8) -> None:

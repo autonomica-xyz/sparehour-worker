@@ -430,7 +430,7 @@ def make_server(
                 return True
             self.close_connection = True
             self.send_response(401)
-            self.send_header("WWW-Authenticate", 'Bearer realm="dworker-dashboard"')
+            self.send_header("WWW-Authenticate", 'Bearer realm="sparehour-worker-dashboard"')
             self.send_header("Content-Type", "application/json")
             self.send_header("Cache-Control", "no-store")
             body = json.dumps({"ok": False, "error": "authentication required"}).encode()

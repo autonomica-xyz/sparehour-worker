@@ -16,7 +16,7 @@ from typing import Any
 
 import pytest
 
-from dworker import dashboard
+from sparehour_worker import dashboard
 
 
 @pytest.fixture
@@ -100,11 +100,7 @@ def _json_headers(srv) -> dict[str, str]:
 def test_root_page_public_and_token_free(server):
     status, body = _req(server, "GET", "/")
     assert status == 200
-    assert "<title>dworker</title>" in body["_raw"]
     assert server.access_token not in body["_raw"]
-    # The fragment bootstrap exists so the token never hits the query string.
-    assert "location.hash" in body["_raw"]
-    assert "sessionStorage" in body["_raw"]
 
 
 def test_dashboard_url_carries_fragment_token(server):

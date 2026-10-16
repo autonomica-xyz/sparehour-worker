@@ -34,7 +34,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from gpu_orchestrator.agent import (
+from sparehour.agent import (
     AgentConfig,
     AgentError,
     AgentRunner,
@@ -42,7 +42,7 @@ from gpu_orchestrator.agent import (
     _load_output_manifest,
     _process_request,
 )
-from gpu_orchestrator.models import AgentRegistration, SlotInventory
+from sparehour.models import AgentRegistration, SlotInventory
 
 from . import config as config_mod
 from . import hardware, idle, queues as queues_mod
@@ -51,10 +51,10 @@ from .client import WorkerClient
 # Docker container names the runner owns; used to force-stop the workload
 # container itself on cancellation/timeout (killing only the `docker run`
 # CLI would leave a detached container holding the GPU).
-_CONTAINER_PREFIX = "dgpu-"
+_CONTAINER_PREFIX = "sparehour-"
 
 # Upper bound on one `docker pull` during prefetch; network stalls must not
-# pin the dashboard's prefetch worker (or `dworker prefetch`) forever.
+# pin the dashboard's prefetch worker (or `sparehour-worker prefetch`) forever.
 PREFETCH_PULL_TIMEOUT = 600.0
 
 
@@ -95,6 +95,7 @@ class WorkerStatus:
                         "workload": job.get("workload"),
                         "route": job.get("route"),
                         "started_at": _now(),
+                        "started_at_seconds": time.time(),
                     }
                     if job
                     else None
@@ -481,7 +482,7 @@ class IdleGatedRunner(AgentRunner):
     ) -> list[dict[str, Any]]:
         """One executor for all vendors; only GPU wiring differs.
 
-        Semantics match upstream: request.json + DGPU_* environment,
+        Semantics match upstream: request.json + SPAREHOUR_* environment,
         {agent_python} substitution for host commands, lease-checked polling
         against a deadline, log-tail error reporting, outputs.json manifest.
         Vendor wiring:
@@ -516,10 +517,10 @@ class IdleGatedRunner(AgentRunner):
             **os.environ,
             **executor.get("environment", {}),
             **self._device_environment(slot),
-            "DGPU_JOB_ID": job["id"],
-            "DGPU_REQUEST_JSON": str(request_path),
-            "DGPU_OUTPUT_DIR": str(workdir),
-            "DGPU_OUTPUT_MANIFEST": str(output_manifest),
+            "SPAREHOUR_JOB_ID": job["id"],
+            "SPAREHOUR_REQUEST_JSON": str(request_path),
+            "SPAREHOUR_OUTPUT_DIR": str(workdir),
+            "SPAREHOUR_OUTPUT_MANIFEST": str(output_manifest),
         }
         command = [
             sys.executable if argument == "{agent_python}" else argument
@@ -541,13 +542,13 @@ class IdleGatedRunner(AgentRunner):
                 "--mount",
                 f"type=bind,src={workdir},dst=/job",
                 "-e",
-                "DGPU_JOB_ID",
+                "SPAREHOUR_JOB_ID",
                 "-e",
-                "DGPU_REQUEST_JSON=/job/request.json",
+                "SPAREHOUR_REQUEST_JSON=/job/request.json",
                 "-e",
-                "DGPU_OUTPUT_DIR=/job",
+                "SPAREHOUR_OUTPUT_DIR=/job",
                 "-e",
-                "DGPU_OUTPUT_MANIFEST=/job/outputs.json",
+                "SPAREHOUR_OUTPUT_MANIFEST=/job/outputs.json",
                 *container_environment,
                 executor["image"],
                 *executor["command"],
@@ -933,12 +934,17 @@ class WorkerRuntime:
                 if best[0]:
                     break
             ok, reason = best or (False, "no slots")
+            compatible, compat_reason = queues_mod.hardware_compatibility(
+                queue, slots, provider=provider, host=self.host, agent_labels=agent_labels,
+            )
             report.append(
                 {
                     **queue,
                     "selected": queue["capability"] in selected,
                     "eligible": ok,
                     "match_reason": reason,
+                    "compatible": compatible,
+                    "compat_reason": compat_reason,
                 }
             )
         return report
@@ -977,7 +983,7 @@ class WorkerRuntime:
                 elif queue["executor_type"] == "plugin":
                     others.add(
                         f"{queue['workload']}/{queue['route']}: plugin {queue['executor_detail']} "
-                        f"(install its model pack manually, then dworker model-packs add)"
+                        f"(install its model pack manually, then sparehour-worker model-packs add)"
                     )
                 elif queue["executor_type"] == "http":
                     others.add(

@@ -28,8 +28,8 @@ import sys
 from pathlib import Path
 from typing import Callable
 
-from gpu_orchestrator.agent import AgentError, discover_nvidia_slots
-from gpu_orchestrator.models import SlotInventory
+from sparehour.agent import AgentError, discover_nvidia_slots
+from sparehour.models import SlotInventory
 
 _SYS_DRM = Path("/sys/class/drm")
 _CGROUP_ROOT = Path("/sys/fs/cgroup")

@@ -9,7 +9,7 @@ from __future__ import annotations
 from fnmatch import fnmatch
 from typing import Any
 
-from gpu_orchestrator.agent import AgentError, ControlPlaneClient
+from sparehour.agent import AgentError, ControlPlaneClient
 
 
 def fetch_workloads(client: ControlPlaneClient) -> list[dict[str, Any]]:
@@ -166,3 +166,49 @@ def _version_tuple(value: Any) -> tuple[int, ...]:
         return tuple(int(part) for part in str(value).split("."))
     except ValueError:
         return ()
+
+
+def hardware_compatibility(
+    queue: dict[str, Any],
+    slots: list[Any],
+    *,
+    provider: str,
+    host: dict[str, Any],
+    agent_labels: dict[str, str],
+) -> tuple[bool, str]:
+    """(ok, failing-reason) hardware/provider readiness, ignoring selection.
+
+    ``route_matches`` conflates two different answers: whether the operator
+    selected the capability, and whether this machine could serve the route
+    at all. The dashboard needs them separated — a route whose capability is
+    unselected still reports "compatible" so the toggle reads as an offer,
+    not an impossibility. Model packs are excluded for the same reason
+    dynamic provisioning skips them: a missing pack is fixable readiness
+    (operator provisioning), not machine incompatibility.
+
+    Everything else — vendor/ROCm nodes, VRAM, compute capability, CPU/RAM/
+    disk, provider allowlist, GPU model lists, required labels — still
+    applies. Accepts ``SlotInventory`` models or plain dicts. Per-queue: the
+    reason is whichever route-level check failed first for the best slot,
+    so callers must not generalize it across a whole capability.
+    """
+    requirements = {
+        key: value
+        for key, value in requirements_for(queue).items()
+        if key not in ("capability", "model_packs")
+    }
+    best: tuple[bool, str] | None = None
+    for slot in slots:
+        slot_dict = slot.model_dump() if hasattr(slot, "model_dump") else dict(slot)
+        match = route_matches(
+            requirements,
+            slot_dict,
+            provider=provider,
+            host=host,
+            agent_labels=agent_labels,
+        )
+        if best is None or (match[0] and not best[0]):
+            best = match
+        if best[0]:
+            break
+    return best or (False, "no slots")

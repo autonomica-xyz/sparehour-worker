@@ -1,25 +1,28 @@
-# dworker (distributed-worker)
+# Sparehour Worker
 
-`dworker` is the worker side of [Distributed
-GPU](https://github.com/autonomica-xyz/distributed-gpu): an open-source CLI
+**Sparehour Worker** is the worker side of
+[Sparehour](https://github.com/autonomica-xyz/sparehour): an open-source CLI
 and local dashboard that lets a workstation or server contribute spare
 NVIDIA, AMD, or CPU compute to a control plane — SETI@home-style, claiming
 independent jobs only when you tell it to. The controller (a separate,
 GPL-3.0-or-later package) defines trusted workload routes, stores jobs
-durably, and schedules at most one job per worker slot; `dworker`
+durably, and schedules at most one job per worker slot; `sparehour-worker`
 registers slots, advertises the capabilities you select, and runs the jobs
 it claims.
 
-![dworker local dashboard](assets/screenshots/worker-dashboard.png)
+![Sparehour Worker local dashboard](assets/screenshots/worker-dashboard.png)
 
-*A local example worker with two CPU slots, active jobs, and workload eligibility.*
+*The dark local dashboard uses Autonomica colours and system sans typography:
+live worker status, per-slot jobs, workload switches, and hardware compatibility.*
 
-## Demo video
+## Historical demo video
 
-[Watch the 60-second dworker demonstration](assets/videos/worker-demo.mp4):
+[Watch the 60-second worker demonstration](assets/videos/worker-demo.mp4):
 real GPU inventory, workload selection, pause/resume, and a dispatched image
 job returning its result. Captioned and edited for length; runtime and model
 weights are provisioned separately.
+The recording predates the Sparehour rebrand; its interface and burned-in
+captions show the previous names and design. The screenshot above is current.
 
 [Poster, subtitles, and sharing guide](assets/videos/README.md).
 
@@ -28,13 +31,13 @@ weights are provisioned separately.
 - **Inventory** — detects NVIDIA GPUs via `nvidia-smi`, AMD GPUs via the
   amdgpu sysfs tree, and configurable CPU slots (`cpu_slots=N`), and
   reports usable cores/RAM after affinity and cgroup limits.
-- **Queue visibility** — `dworker doctor` and `dworker queues` show every
+- **Queue visibility** — `sparehour-worker doctor` and `sparehour-worker queues` show every
   route the controller offers and whether this machine matches (vendor,
   VRAM, compute capability, GPU model, model packs, labels), with the
   reason when it does not.
 - **Explicit selection** — you choose what to advertise:
-  `dworker select translate-batch`, or the Run/Stop toggles in the
-  dashboard. Toggles re-register live; a running job always finishes.
+  `sparehour-worker select translate-batch`, or workload switches in the
+  dashboard. Switches re-register live; a running job always finishes.
 - **Idle gating** — with `idle_only=true` the worker claims only while the
   machine is confirmed idle: all local sessions locked, or quiet past
   `idle_after_seconds`. Detection reads logind/X11 on Linux,
@@ -45,27 +48,31 @@ weights are provisioned separately.
   `perms=dynamic`, the worker watches per-route queue depth and advertises
   exactly the capabilities that have pending work, downloading and
   SHA-256-verifying demanded model packs before the first claim.
-- **Prefetch** — `dworker prefetch` docker-pulls the digest-pinned images
+- **Prefetch** — `sparehour-worker prefetch` docker-pulls the digest-pinned images
   behind your selected capabilities and reports what model packs or local
   model servers a route still needs.
-- **Dashboard** — during `dworker run`, a status page binds a **literal
+- **Dashboard** — during `sparehour-worker run`, a status page binds a **literal
   loopback address only** (default `http://127.0.0.1:7788`); every `/api/*`
   call needs a per-run bearer token delivered in the URL fragment and
-  stored mode-0600 in `config.json.dashboard-url`.
+  stored mode-0600 in `<config-file>.dashboard-url`.
+  Hardware compatibility is shown separately from selection and model-pack
+  readiness. Routes share one switch per capability; long route lists expand
+  under “more routes”, with individual requirements and executor details kept
+  available. Polling preserves open disclosures and focused switches.
 
 ## Requirements
 
 - Python 3.10 or newer. GPU drivers and inference runtimes are
   platform-specific; Linux is recommended for GPU workers.
-- The separate `distributed-gpu` package, installed from source or a wheel.
+- The separate `sparehour` package, installed from source or a wheel.
 - For container routes, Docker and access to its daemon.
 - For AMD execution, a ROCm-capable runtime, accessible `/dev/kfd` and
   `/dev/dri`, and a card with a nonzero sysfs `unique_id`.
 
 Install each route's executor, runtime and reviewed model packs before
 advertising it. ML dependencies and weights are not part of the base worker
-install. The controller's [workload guide](https://github.com/autonomica-xyz/distributed-gpu/blob/main/workloads/README.md)
-and [runtime profiles](https://github.com/autonomica-xyz/distributed-gpu/tree/main/deploy)
+install. The controller's [workload guide](https://github.com/autonomica-xyz/sparehour/blob/main/workloads/README.md)
+and [runtime profiles](https://github.com/autonomica-xyz/sparehour/tree/main/deploy)
 describe those prerequisites. Bundled ML routes target NVIDIA; AMD and CPU
 capacity need compatible routes configured by your controller operator.
 
@@ -75,16 +82,41 @@ Both packages install from source. The worker depends on the control-plane
 package, so install that first:
 
 ```bash
-git clone https://github.com/autonomica-xyz/distributed-gpu.git
-git clone https://github.com/autonomica-xyz/distributed-worker.git
-python3 -m venv ~/.local/share/dworker/venv
-~/.local/share/dworker/venv/bin/pip install ./distributed-gpu ./distributed-worker
-export PATH="$HOME/.local/share/dworker/venv/bin:$PATH"
+git clone https://github.com/autonomica-xyz/sparehour.git sparehour
+git clone https://github.com/autonomica-xyz/sparehour-worker.git sparehour-worker
+python3 -m venv ~/.local/share/sparehour-worker/venv
+~/.local/share/sparehour-worker/venv/bin/pip install ./sparehour ./sparehour-worker
+export PATH="$HOME/.local/share/sparehour-worker/venv/bin:$PATH"
 ```
 
-For always-on hosts, [`deploy/dworker.service`](deploy/dworker.service) is
+For always-on hosts, [`deploy/sparehour-worker.service`](deploy/sparehour-worker.service) is
 an example per-user systemd unit matching this installation. Follow its
 session-environment and lingering instructions for workstation idle detection.
+
+## Upgrading an existing worker
+
+This is a coordinated, breaking rebrand, not an alias layer. Install the matching
+`sparehour` controller package and `sparehour-worker` worker package together;
+Python imports are now `sparehour`, `sparehour_workloads`, and `sparehour_worker`.
+The repositories are now `autonomica-xyz/sparehour` and
+`autonomica-xyz/sparehour-worker`. Existing checkout directories can keep their names.
+
+- Drain existing work before upgrading the controller and its workers. Existing
+  databases, artifacts, models, credentials, and services are not moved or
+  modified automatically.
+- Copy your previous worker settings into `~/.config/sparehour/worker.json`
+  (or keep an explicit `--config PATH`). Preserve mode 0600. Update the stored
+  endpoint/token using `sparehour-worker login` and a freshly issued scoped token.
+- Use `SPAREHOUR_WORKER_CONFIG` and `SPAREHOUR_WORKER_TOKEN` instead of the old
+  worker environment variables. The default work directory is
+  `~/.local/state/sparehour/worker/work`; move cached work explicitly if needed.
+- Replace the old user service with `deploy/sparehour-worker.service` and restart
+  it only after the matching controller is available. Reopen its newly written
+  dashboard URL; old browser access keys do not carry across runs.
+- Publish the controller cutover before worker CI runs. CI checks out
+  `autonomica-xyz/sparehour`; set repository variable
+  `SPAREHOUR_CONTROLLER_REF` to the matching controller commit to pin it.
+
 
 ## First run
 
@@ -95,7 +127,7 @@ database as the running service. Scope it to the intended workloads; repeat
 ```bash
 umask 077
 mkdir -p state
-.venv/bin/dgpu token --role agent --subject tower-a \
+.venv/bin/sparehour token --role agent --subject tower-a \
     --scope routes=translate-batch --expires-hours 720 > state/tower-a.token
 ```
 
@@ -105,30 +137,30 @@ example endpoint below with your controller's HTTPS address.
 Then on the worker host:
 
 ```bash
-dworker login --endpoint https://gpu-control.example.com \
+sparehour-worker login --endpoint https://gpu-control.example.com \
     --token-file token.txt --agent-id tower-a
-dworker doctor                       # hardware, token, idle probe, queue matrix
-dworker select translate-batch       # advertise a capability
-dworker run                          # claim loop + dashboard on 127.0.0.1:7788
+sparehour-worker doctor                       # hardware, token, idle probe, queue matrix
+sparehour-worker select translate-batch       # advertise a capability
+sparehour-worker run                          # claim loop + dashboard on 127.0.0.1:7788
 ```
 
 Open the full dashboard access URL printed in an interactive terminal, or
-read it from `~/.config/dworker/config.json.dashboard-url`. Its private
+read it from `~/.config/sparehour/worker.json.dashboard-url`. Its private
 per-run token is separate from the controller credential; do not share the
 URL. The plain localhost URL alone does not authenticate a browser.
 
 Useful variations:
 
 ```bash
-dworker config set idle_only=true        # claim only while confirmed idle
-dworker config set idle_after_seconds=600
-dworker config set cpu_slots=4           # GPU-less box serving vendor=cpu routes
-dworker run --cpu-slots 2                # one-run override, nothing saved
-dworker run --once                       # smoke test: one job per slot, then exit
+sparehour-worker config set idle_only=true        # claim only while confirmed idle
+sparehour-worker config set idle_after_seconds=600
+sparehour-worker config set cpu_slots=4           # GPU-less box serving vendor=cpu routes
+sparehour-worker run --cpu-slots 2                # one-run override, nothing saved
+sparehour-worker run --once                       # smoke test: one job per slot, then exit
 ```
 
 Dynamic (queue-driven) selection needs the depth signal on the token
-(`--scope perms=dynamic`) plus `dworker config set dynamic=true` and a
+(`--scope perms=dynamic`) plus `sparehour-worker config set dynamic=true` and a
 `model_catalog` pointing at a lock catalog (local file or HTTPS URL) in the
 controller's `models/*.lock.json` format; install the `[models]` extra for
 Hugging Face pack downloads.
@@ -165,7 +197,7 @@ Hugging Face pack downloads.
 | `select` / `deselect` | toggle advertised capabilities (live) |
 | `prefetch` | docker-pull images for selected capabilities |
 | `run` | the worker loop (`--once`, `--idle-only`, `--idle-after`, `--cpu-slots`, `--no-dashboard`) |
-| `config` | get/set settings (`config set cpu_slots=4`); file: `~/.config/dworker/config.json` |
+| `config` | get/set settings (`config set cpu_slots=4`); file: `~/.config/sparehour/worker.json` |
 
 Key config keys: `capabilities` (empty claims nothing), `cpu_slots`,
 `idle_only`, `idle_after_seconds`, `dynamic`, `model_catalog`, `workdir`,
@@ -185,7 +217,7 @@ Key config keys: `capabilities` (empty claims nothing), `cpu_slots`,
 
 ## License
 
-MIT — see [LICENSE](LICENSE). This worker depends on the `distributed-gpu`
+MIT — see [LICENSE](LICENSE). This worker depends on the `sparehour`
 control-plane package, which is **GPL-3.0-or-later** and distributed
 separately; installing this worker alongside it does not change its
 license.

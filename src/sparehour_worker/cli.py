@@ -1,4 +1,4 @@
-"""dworker — command line for the opportunistic distributed worker."""
+"""Sparehour Worker — lend spare GPU and CPU capacity to a Sparehour control plane."""
 
 from __future__ import annotations
 
@@ -49,7 +49,7 @@ def _load_config(args: argparse.Namespace) -> dict[str, Any]:
 def _runtime(args: argparse.Namespace) -> WorkerRuntime:
     config = _load_config(args)
     if not config["endpoint"] or not config["token"]:
-        fail("no credentials configured — run: dworker login --endpoint URL --token-file FILE")
+        fail("no credentials configured — run: sparehour-worker login --endpoint URL --token-file FILE")
     try:
         return WorkerRuntime(config, _config_file(args))
     except Exception as exc:
@@ -73,17 +73,20 @@ def _coerce(key: str, value: Any) -> Any:
 
 def _print_queues(report: list[dict[str, Any]]) -> None:
     if not report:
-        print("  (no workloads visible to this token)")
+        print("  No workloads visible to this access token.")
         return
-    name_width = max(len(f"{q['workload']}/{q['route']}") for q in report)
+    name_width = max(len(f"{q['workload']} / {q['route']}") for q in report)
     for queue in report:
-        mark = "+" if queue["selected"] else " "
-        flag = "eligible " if queue["eligible"] else "no      "
-        print(
-            f"  [{mark}] {flag} {queue['workload']}/{queue['route']:<{name_width}}"
-            f"  {queue['capability']:<24} {queue['executor_type']:<9} {queue['match_reason']}"
-        )
-    print("\n  [+]=advertised capability. Toggle with: dworker select|deselect <capability>")
+        name = f"{queue['workload']} / {queue['route']}"
+        selected = queue["selected"]
+        compatible = queue.get("compatible", queue["eligible"])
+        if selected:
+            readiness = "ready" if queue["eligible"] else queue["match_reason"]
+        else:
+            readiness = "compatible" if compatible else queue.get("compat_reason", queue["match_reason"])
+        print(f"  {'on' if selected else 'off':<4} {name:<{name_width}}  [{queue['capability']}]  {readiness}")
+    print("\n  Select work: sparehour-worker select <capability> (shown in brackets)")
+    print("  Stop taking work: sparehour-worker deselect <capability>")
 
 
 def cmd_login(args: argparse.Namespace) -> int:
@@ -94,7 +97,7 @@ def cmd_login(args: argparse.Namespace) -> int:
         fail(f"invalid endpoint: {_clean_message(exc)}")
     token = args.token or _token_from_file(args) or _token_prompt()
     if not token:
-        fail("no token provided (--token, --token-file, or DWORKER_TOKEN)")
+        fail("no token provided (--token, --token-file, or SPAREHOUR_WORKER_TOKEN)")
     config["token"] = token
     if args.agent_id:
         config["agent_id"] = args.agent_id
@@ -109,7 +112,7 @@ def cmd_login(args: argparse.Namespace) -> int:
 def _token_from_file(args: argparse.Namespace) -> str:
     if args.token_file:
         return Path(args.token_file).read_text(encoding="utf-8").strip()
-    return os.environ.get("DWORKER_TOKEN", "").strip()
+    return os.environ.get("SPAREHOUR_WORKER_TOKEN", "").strip()
 
 
 def _token_prompt() -> str:
@@ -122,48 +125,43 @@ def _token_prompt() -> str:
 def cmd_doctor(args: argparse.Namespace) -> int:
     runtime = _runtime(args)
     try:
-        print(f"dworker {__version__}  config={runtime.config_file}")
-        print(f"control plane: {runtime.config['endpoint']}", end=" ")
+        print(f"Sparehour Worker {__version__} · {runtime.config['agent_id']}")
+        print(f"  Configuration  {runtime.config_file}\n")
         try:
             health = runtime.client.client.get("/healthz").json()
-            print(f"OK ({health.get('workloads', '?')} workloads)")
+            print(f"  + Control plane  {runtime.config['endpoint']} · {health.get('workloads', '?')} workloads")
         except Exception as exc:
-            print(f"UNREACHABLE: {_clean_message(exc, runtime.config)}")
+            print(f"  ! Control plane  {_clean_message(exc, runtime.config)}")
             return 1
         try:
-            runtime.queues_report(max_age=0.0)
-            print("token: accepted")
+            report = runtime.queues_report(max_age=0.0)
+            print("  + Access token   accepted")
         except Exception as exc:
-            print(f"token: REJECTED: {_clean_message(exc, runtime.config)}")
+            print(f"  ! Access token   {_clean_message(exc, runtime.config)}")
             return 1
-        for note in runtime.hardware_notes:
-            print(f"hardware: {note}")
         host = runtime.host
         print(
-            f"hardware: host cpu={host['cpu_cores']:.0f} cores ram={host['ram_mb']} MB"
-            f" disk_free={host['disk_free_mb']} MB"
+            f"  - Host           {host['cpu_cores']:.0f} cores · "
+            f"{host['ram_mb'] / 1024:.1f} GB RAM · "
+            f"{host['disk_free_mb'] / 1024:.1f} GB free disk"
         )
         for slot in runtime.slots:
             print(
-                f"  slot {slot.id}: {slot.vendor} {slot.model} ({slot.vram_mb} MB)"
-                + (f" cc={slot.compute_capability}" if slot.compute_capability else "")
+                f"  - Slot           {slot.id} · {slot.model} · {slot.vram_mb / 1024:.1f} GB"
+                + (f" · compute {slot.compute_capability}" if slot.compute_capability else "")
             )
-        print(f"docker: {'available' if shutil.which('docker') else 'MISSING (container routes unusable)'}")
+        for note in runtime.hardware_notes:
+            print(f"  - Hardware note  {note}")
+        docker = bool(shutil.which("docker"))
+        print(f"  {'+' if docker else '!'} Docker         {'available' if docker else 'not installed — container routes unavailable'}")
         state = idle.is_idle(float(runtime.config["idle_after_seconds"]))
-        print(
-            f"idle detection: {'locked' if state.locked else 'unlocked'}, "
-            f"idle={state.idle_seconds if state.idle_seconds is not None else '?'}s -> "
-            f"{'IDLE' if state.idle else 'ACTIVE'} ({state.reason})"
-        )
-        print(f"selection: capabilities={runtime.config['capabilities'] or 'none'} "
-              f"model_packs={runtime.config['model_packs'] or 'none'} "
-              f"idle_only={runtime.config['idle_only']} "
-              f"cpu_slots={runtime.config['cpu_slots']}")
-        print("queues:")
-        try:
-            _print_queues(runtime.queues_report(max_age=0.0))
-        except Exception as exc:
-            fail(f"queue listing failed: {_clean_message(exc, runtime.config)}")
+        policy = "only when idle" if runtime.config["idle_only"] else "whenever work is queued"
+        print(f"  - When to work   {policy}")
+        print(f"  - Idle signal    {'idle' if state.idle else 'not idle'} · {state.reason}")
+        print(f"  - Selection      {'dynamic' if runtime.config['dynamic'] else 'manual'}")
+        print(f"  - Model packs    {', '.join(runtime.config['model_packs']) or 'none installed'}")
+        print("\nWorkloads")
+        _print_queues(report)
         return 0
     finally:
         runtime.close()
@@ -211,7 +209,7 @@ def cmd_prefetch(args: argparse.Namespace) -> int:
 def cmd_run(args: argparse.Namespace) -> int:
     config = _load_config(args)
     if not config["endpoint"] or not config["token"]:
-        fail("no credentials configured — run: dworker login --endpoint URL --token-file FILE")
+        fail("no credentials configured — run: sparehour-worker login --endpoint URL --token-file FILE")
     # CLI overrides must be in place BEFORE WorkerRuntime discovers slots:
     # --cpu-slots (including --cpu-slots 0) changes the registered inventory,
     # and idle settings gate the very first claim attempt. The pre-override
@@ -241,7 +239,7 @@ def _run_worker(runtime: WorkerRuntime, *, once: bool, no_dashboard: bool) -> in
     try:
         if not runtime.slots:
             fail(
-                "no slots to register: select capabilities (dworker select <capability>), "
+                "no slots to register: select capabilities (sparehour-worker select <capability>), "
                 "have a GPU (nvidia-smi / amdgpu sysfs), or set cpu_slots > 0"
             )
         try:
@@ -318,7 +316,7 @@ def _start_dynamic(runtime: WorkerRuntime) -> threading.Thread:
     if report and all(queue.get("pending_jobs") is None for queue in report):
         fail(
             "dynamic=true but this token cannot see queue depths — reissue it "
-            "with: dgpu token --role agent --subject NAME --scope perms=dynamic"
+            "with: sparehour token --role agent --subject NAME --scope perms=dynamic"
         )
     if not report:
         fail("dynamic=true but the control plane exposes no workloads")
@@ -387,10 +385,9 @@ def _start_dashboard(
             }
         )
         for slot in runtime.slots:
-            snapshot["slots"].setdefault(
-                slot.id,
-                {"state": "registered", "job": None, "hardware": ""},
-            )["hardware"] = f"{slot.vendor} {slot.model} ({slot.vram_mb} MB)"
+            info = snapshot["slots"].setdefault(slot.id, {"state": "registered", "job": None})
+            info["name"] = f"{'CPU' if slot.vendor == 'cpu' else 'GPU'} {slot.gpu_index}"
+            info["hardware"] = f"{slot.model} · {slot.vram_mb / 1024:g} GB"
         return snapshot
 
     def pause(paused: bool) -> None:
@@ -480,7 +477,7 @@ def cmd_config(args: argparse.Namespace) -> int:
     words = args.action
     if words and words[0] == "set":
         if len(words) != 2:
-            fail("usage: dworker config set KEY=VALUE")
+            fail("usage: sparehour-worker config set KEY=VALUE")
         key, separator, value = words[1].partition("=")
         if not separator or key not in config_mod.DEFAULTS:
             fail(f"unknown config key {key!r} (known: {', '.join(sorted(config_mod.DEFAULTS))})")
@@ -492,7 +489,7 @@ def cmd_config(args: argparse.Namespace) -> int:
         print(f"{key} = {_redacted(key, config[key])!r} (saved)")
     elif words and words[0] == "get":
         if len(words) != 2:
-            fail("usage: dworker config get KEY")
+            fail("usage: sparehour-worker config get KEY")
         print(_redacted(words[1], config.get(words[1], "")))
     elif not words:
         shown = dict(config)
@@ -500,7 +497,7 @@ def cmd_config(args: argparse.Namespace) -> int:
             shown["token"] = "<redacted>"
         print(json.dumps(shown, indent=2, sort_keys=True))
     else:
-        fail(f"usage: dworker config [set KEY=VALUE | get KEY] (got: {' '.join(words)})")
+        fail(f"usage: sparehour-worker config [set KEY=VALUE | get KEY] (got: {' '.join(words)})")
     return 0
 
 
@@ -512,14 +509,14 @@ def _redacted(key: str, value: Any) -> Any:
 
 
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(prog="dworker", description=__doc__)
-    parser.add_argument("--config", help="config file path (default: ~/.config/dworker/config.json)")
-    parser.add_argument("--version", action="version", version=f"dworker {__version__}")
+    parser = argparse.ArgumentParser(prog="sparehour-worker", description=__doc__)
+    parser.add_argument("--config", help="config file path (default: ~/.config/sparehour/worker.json)")
+    parser.add_argument("--version", action="version", version=f"sparehour-worker {__version__}")
     commands = parser.add_subparsers(dest="command", required=True)
 
     login = commands.add_parser("login", help="store control-plane endpoint and agent token")
     login.add_argument("--endpoint", required=True, help="e.g. https://gpu-control.example.com")
-    login.add_argument("--token", help="agent bearer token (or DWORKER_TOKEN, or prompt)")
+    login.add_argument("--token", help="agent bearer token (or SPAREHOUR_WORKER_TOKEN, or prompt)")
     login.add_argument("--token-file", help="file containing the token")
     login.add_argument("--agent-id", help="defaults to hostname")
     login.set_defaults(func=cmd_login)
@@ -531,7 +528,7 @@ def build_parser() -> argparse.ArgumentParser:
     queues = commands.add_parser("queues", help="list queues and whether this machine matches")
     queues.set_defaults(func=cmd_queues)
 
-    select = commands.add_parser("select", help="advertise capability(ies): dworker select demo-gpu")
+    select = commands.add_parser("select", help="advertise capability(ies): sparehour-worker select demo-gpu")
     select.add_argument("capabilities", nargs="*")
     select.set_defaults(func=lambda args: _cmd_select(args, True))
 

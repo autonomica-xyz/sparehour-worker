@@ -15,7 +15,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from dworker import idle
+from sparehour_worker import idle
 
 
 def _props(**overrides) -> dict[str, str]:

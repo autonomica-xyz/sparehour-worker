@@ -18,12 +18,12 @@ from pathlib import Path
 
 import httpx
 import pytest
-from gpu_orchestrator.agent import AgentConfig, AgentError, ExecutionError
-from gpu_orchestrator.models import AgentRegistration, SlotInventory
+from sparehour.agent import AgentConfig, AgentError, ExecutionError
+from sparehour.models import AgentRegistration, SlotInventory
 
-from dworker import runner as runner_mod
-from dworker.client import WorkerClient
-from dworker.runner import IdleGatedRunner, WorkerRuntime, WorkerStatus
+from sparehour_worker import runner as runner_mod
+from sparehour_worker.client import WorkerClient
+from sparehour_worker.runner import IdleGatedRunner, WorkerRuntime, WorkerStatus
 
 
 # -- fixtures ---------------------------------------------------------------
@@ -47,13 +47,13 @@ def _slot(vendor="cpu", index=0, caps=None, packs=None, **kw):
 
 _MANIFEST = (
     "import os;"
-    "open(os.environ['DGPU_OUTPUT_MANIFEST'],'w').write('{\"files\":[]}')"
+    "open(os.environ['SPAREHOUR_OUTPUT_MANIFEST'],'w').write('{\"files\":[]}')"
 )
 _ENV_DUMP = (
     "import os,json;"
     "json.dump({k:os.environ.get(k) for k in "
     "['CUDA_VISIBLE_DEVICES','HIP_VISIBLE_DEVICES','ROCR_VISIBLE_DEVICES']},"
-    "open(os.environ['DGPU_OUTPUT_DIR']+'/env.json','w'));"
+    "open(os.environ['SPAREHOUR_OUTPUT_DIR']+'/env.json','w'));"
     + _MANIFEST
 )
 
@@ -175,7 +175,7 @@ args = sys.argv[1:]
 record = os.environ.get("FAKE_DOCKER_RECORD")
 entry = {{"argv": args, "env": {{k: os.environ.get(k) for k in (
     "CUDA_VISIBLE_DEVICES", "HIP_VISIBLE_DEVICES", "ROCR_VISIBLE_DEVICES",
-    "NVIDIA_VISIBLE_DEVICES", "DGPU_JOB_ID")}}}}
+    "NVIDIA_VISIBLE_DEVICES", "SPAREHOUR_JOB_ID")}}}}
 if record:
     with open(record, "a") as fh:
         fh.write(json.dumps(entry) + "\\n")
@@ -369,7 +369,7 @@ def test_cancel_stops_named_container(tmp_path, fake_docker, monkeypatch):
             _slot("cpu"), _container_job(), workdir, lease, container=True
         )
     calls = [call["argv"] for call in _docker_calls(fake_docker)]
-    name = "dgpu-job-1"
+    name = "sparehour-job-1"
     assert calls[0][0] == "run"
     assert ["stop", "-t", "2", name] in calls
     assert ["rm", "-f", name] in calls

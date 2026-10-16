@@ -9,11 +9,11 @@ from __future__ import annotations
 
 import httpx
 import pytest
-from gpu_orchestrator.agent import AgentError
+from sparehour.agent import AgentError
 
-from dworker import cli as cli_mod
-from dworker import queues as queues_mod
-from dworker.client import WorkerClient
+from sparehour_worker import cli as cli_mod
+from sparehour_worker import queues as queues_mod
+from sparehour_worker.client import WorkerClient
 
 
 
@@ -115,6 +115,34 @@ def test_requirements_for_carries_gpu_count():
     ok, _ = match(requirements, _slot())
     assert not ok
 
+
+
+def test_hardware_compatibility_ignores_selection_and_packs():
+    """The dashboard's compatible/independent-of-selected signal: an
+    unselected capability on hardware that suits still reports compatible,
+    while a real hardware miss reports its reason — not 'not selected'."""
+    queue = {
+        "workload": "w",
+        "route": "r",
+        "capability": "unselected",
+        "model_packs": "irrelevant",
+        "resources": {"vendor": "nvidia", "min_vram_mb": 1},
+    }
+    ok, reason = queues_mod.hardware_compatibility(
+        queue, [_slot()], provider="local", host=HOST, agent_labels={}
+    )
+    assert ok and reason == "matches"
+
+    ok, reason = queues_mod.hardware_compatibility(
+        queue, [_slot(vendor="cpu")], provider="local", host=HOST, agent_labels={}
+    )
+    assert not ok and "not selected" not in reason
+
+    queue["resources"]["min_vram_mb"] = 10**9
+    ok, reason = queues_mod.hardware_compatibility(
+        queue, [_slot()], provider="local", host=HOST, agent_labels={}
+    )
+    assert not ok and "MB" in reason
 
 # -- fetch_workloads: sanitized control-plane boundary -------------------------
 
@@ -246,7 +274,7 @@ def test_expand_queues_forwards_environment_and_inputs():
                     },
                     "executor": {
                         "type": "plugin",
-                        "handler": "gpu_orchestrator_workloads.transcription:ParakeetExecutor",
+                        "handler": "sparehour_workloads.transcription:ParakeetExecutor",
                         "environment": {
                             "PARAKEET_MODEL_DIR": "/models/parakeet",
                             "PARAKEET_MODEL_ID": "nvidia/parakeet-tdt-0.6b-v3",

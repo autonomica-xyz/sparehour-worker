@@ -2,38 +2,38 @@
 # idle/lock detection reads your login session via logind.
 #
 # Install the package into the canonical venv first:
-#   python3 -m venv ~/.local/share/dworker/venv
-#   ~/.local/share/dworker/venv/bin/pip install /path/to/distributed-gpu
-#   ~/.local/share/dworker/venv/bin/pip install /path/to/distributed-worker
+#   python3 -m venv ~/.local/share/sparehour-worker/venv
+#   ~/.local/share/sparehour-worker/venv/bin/pip install /path/to/sparehour
+#   ~/.local/share/sparehour-worker/venv/bin/pip install /path/to/sparehour-worker
 # Then install this unit:
 #   mkdir -p ~/.config/systemd/user
-#   cp dworker.service ~/.config/systemd/user/
-#   systemctl --user daemon-reload && systemctl --user enable --now dworker
+#   cp sparehour-worker.service ~/.config/systemd/user/
+#   systemctl --user daemon-reload && systemctl --user enable --now sparehour-worker
 # Enable lingering so it keeps running after logout:
 #   loginctl enable-linger $USER
 #
 # Idle detection reads DISPLAY/XAUTHORITY from your login session. Inside a
 # graphical session, import them so the unit sees X11 input state:
 #   systemctl --user import-environment DISPLAY XAUTHORITY
-#   systemctl --user restart dworker
+#   systemctl --user restart sparehour-worker
 # Some desktop environments import these variables automatically. Re-import
 # them after the display changes; without them logind still works, but the
 # X11 input timer is unavailable.
 #
 # The dashboard binds literal loopback only (default 127.0.0.1:7788) and its
 # per-run access URL is written mode 0600 to
-# ~/.config/dworker/config.json.dashboard-url — it is never exposed on
+# ~/.config/sparehour/worker.json.dashboard-url — it is never exposed on
 # 0.0.0.0 and must not be proxied off the host.
 
 [Unit]
-Description=dworker — opportunistic distributed-gpu worker
+Description=Sparehour Worker — spare GPU and CPU compute
 After=network-online.target
 Wants=network-online.target
 
 [Service]
 Type=simple
 # SETI@home mode lives in the config file (idle_only=true, idle_after_seconds=300)
-ExecStart=%h/.local/share/dworker/venv/bin/dworker run
+ExecStart=%h/.local/share/sparehour-worker/venv/bin/sparehour-worker run
 Restart=always
 RestartSec=10
 # Jobs always finish once started; shutdown only stops new claims, drains the

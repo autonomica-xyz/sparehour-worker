@@ -3,7 +3,7 @@ manifest/digest verification, and manager state transitions.
 
 All pack fixtures are real .argosmodel zips built locally and hashed for
 real. Every remote read runs through the owned fetch subprocess
-(`dworker.fetch`): tests use genuine loopback TLS servers — a listener
+(`sparehour_worker.fetch`): tests use genuine loopback TLS servers — a listener
 that accepts but never completes TLS, servers trickling headers/body —
 with the client's certificate verification narrowed only by trusting the
 test CA through the standard SSL_CERT_FILE environment.
@@ -28,9 +28,9 @@ from urllib.parse import urlparse
 
 
 import pytest
-from gpu_orchestrator.models import SlotInventory
+from sparehour.models import SlotInventory
 
-from dworker import dynamic as dyn
+from sparehour_worker import dynamic as dyn
 
 HOST = {"cpu_cores": 16, "ram_mb": 65536, "disk_free_mb": 1000000}
 
@@ -41,7 +41,7 @@ _ARCHIVES: dict = {}
 # PKI material lives in one module temp dir: the fetch child trusts the CA
 # via SSL_CERT_FILE (the default verified context), the TLS server loads
 # the server cert once per fixture.
-_PKI_DIR = Path(tempfile.mkdtemp(prefix="dworker-test-pki-"))
+_PKI_DIR = Path(tempfile.mkdtemp(prefix="sparehour-worker-test-pki-"))
 _CA_FILE = _PKI_DIR / "ca.pem"
 _SERVER_CERT = _PKI_DIR / "server.pem"
 _SERVER_KEY_FILE = _PKI_DIR / "server.key"
@@ -183,7 +183,7 @@ def _fetch_children():
             stat = (entry / "stat").read_text()
             if int(stat.rsplit(") ", 1)[1].split()[1]) != os.getpid():
                 continue
-            if "dworker.fetch" in (entry / "cmdline").read_text():
+            if "sparehour_worker.fetch" in (entry / "cmdline").read_text():
                 running.append(int(entry.name))
         except (OSError, ValueError, IndexError):
             continue
@@ -1311,8 +1311,8 @@ def test_plugin_route_needs_importable_handler(tmp_path, monkeypatch):
 
 
 def test_argos_plugin_reports_missing_optional_dependencies():
-    pytest.importorskip("gpu_orchestrator_workloads.argos_translate")
-    detail = "gpu_orchestrator_workloads.argos_translate:ArgosTranslateExecutor"
+    pytest.importorskip("sparehour_workloads.argos_translate")
+    detail = "sparehour_workloads.argos_translate:ArgosTranslateExecutor"
     result = _plan([_plan_row("plugin", detail)])
     import importlib.util
 
@@ -1694,7 +1694,7 @@ def _hf_row(pack="hf-pack", model_id="org/model", revision=_HF_REV,
 def _hf_pack_dir(target: Path, pack="hf-pack", model_id="org/model",
                  revision=_HF_REV, files=None):
     """Build a real HF pack dir + manifest for preinstalled-pack tests."""
-    mp = pytest.importorskip("gpu_orchestrator_workloads.model_packs")
+    mp = pytest.importorskip("sparehour_workloads.model_packs")
     target.mkdir(parents=True, exist_ok=True)
     files = files or {"config.json": b"{}"}
     rows = []
@@ -1725,7 +1725,7 @@ def test_plan_hf_pack_provisions_env_dir(tmp_path):
 
 
 def test_plan_hf_pack_verifies_preinstalled_dir(tmp_path):
-    pytest.importorskip("gpu_orchestrator_workloads.model_packs")
+    pytest.importorskip("sparehour_workloads.model_packs")
     lock = _hf_lock()
     target = _hf_pack_dir(tmp_path / "installed")
     row = _hf_row(model_dir=str(target))
@@ -1738,7 +1738,7 @@ def test_plan_hf_pack_verifies_preinstalled_dir(tmp_path):
 def test_plan_hf_pack_verifies_without_catalog(tmp_path):
     """Full env pins synthesize an identity; a verified dir is advertised
     with no catalog and no download."""
-    pytest.importorskip("gpu_orchestrator_workloads.model_packs")
+    pytest.importorskip("sparehour_workloads.model_packs")
     target = _hf_pack_dir(tmp_path / "preinstalled")
     row = _hf_row(model_dir=str(target))
     result = _plan([row], catalog={})
@@ -1899,14 +1899,14 @@ def test_service_pack_http_executor_not_ready_when_down():
 
 def test_service_pack_vllm_served_model_probe(monkeypatch):
     """vLLM pack readiness = GET /v1/models ids == {pinned served model}."""
-    pytest.importorskip("gpu_orchestrator_workloads.qwen")
+    pytest.importorskip("sparehour_workloads.qwen")
     server = _json_server(
         json.dumps({"object": "list", "data": [
             {"id": "qwen-pinned", "object": "model"}]}).encode()
     )
     try:
         row = _plan_row(
-            "plugin", "gpu_orchestrator_workloads.qwen:VllmBatchExecutor",
+            "plugin", "sparehour_workloads.qwen:VllmBatchExecutor",
             {
                 "VLLM_BASE_URL": f"http://127.0.0.1:{server.server_port}",
                 "VLLM_SERVED_MODEL": "qwen-pinned",
@@ -1921,7 +1921,7 @@ def test_service_pack_vllm_served_model_probe(monkeypatch):
 
 
 def test_service_pack_vllm_wrong_model_not_ready(monkeypatch):
-    pytest.importorskip("gpu_orchestrator_workloads.qwen")
+    pytest.importorskip("sparehour_workloads.qwen")
     server = _json_server(
         json.dumps({"object": "list", "data": [
             {"id": "other-model", "object": "model"},
@@ -1929,7 +1929,7 @@ def test_service_pack_vllm_wrong_model_not_ready(monkeypatch):
     )
     try:
         row = _plan_row(
-            "plugin", "gpu_orchestrator_workloads.qwen:VllmBatchExecutor",
+            "plugin", "sparehour_workloads.qwen:VllmBatchExecutor",
             {
                 "VLLM_BASE_URL": f"http://127.0.0.1:{server.server_port}",
                 "VLLM_SERVED_MODEL": "qwen-pinned",
@@ -1945,7 +1945,7 @@ def test_service_pack_vllm_wrong_model_not_ready(monkeypatch):
 
 @pytest.mark.parametrize("prefix", ["", "/backend"])
 def test_service_pack_libretranslate_languages_probe(prefix):
-    pytest.importorskip("gpu_orchestrator_workloads.libretranslate")
+    pytest.importorskip("sparehour_workloads.libretranslate")
     import importlib.util
 
     if importlib.util.find_spec("httpx") is None:
@@ -1958,7 +1958,7 @@ def test_service_pack_libretranslate_languages_probe(prefix):
     try:
         row = _plan_row(
             "plugin",
-            "gpu_orchestrator_workloads.libretranslate:LibreTranslateExecutor",
+            "sparehour_workloads.libretranslate:LibreTranslateExecutor",
             {"LIBRETRANSLATE_ENDPOINT":
              f"http://127.0.0.1:{server.server_port}{prefix}/translate"},
         )
@@ -1971,7 +1971,7 @@ def test_service_pack_libretranslate_languages_probe(prefix):
 
 
 def test_service_pack_libretranslate_empty_languages_not_ready():
-    pytest.importorskip("gpu_orchestrator_workloads.libretranslate")
+    pytest.importorskip("sparehour_workloads.libretranslate")
     import importlib.util
 
     if importlib.util.find_spec("httpx") is None:
@@ -1980,7 +1980,7 @@ def test_service_pack_libretranslate_empty_languages_not_ready():
     try:
         row = _plan_row(
             "plugin",
-            "gpu_orchestrator_workloads.libretranslate:LibreTranslateExecutor",
+            "sparehour_workloads.libretranslate:LibreTranslateExecutor",
             {"LIBRETRANSLATE_ENDPOINT":
              f"http://127.0.0.1:{server.server_port}/translate"},
         )
@@ -2042,7 +2042,7 @@ def test_service_probe_cancel_during_wedged_response():
 
 def test_manager_hf_pack_full_cycle(tmp_path, monkeypatch):
     """Manager installs an HF pack via the shared module, then advertises."""
-    mp = pytest.importorskip("gpu_orchestrator_workloads.model_packs")
+    mp = pytest.importorskip("sparehour_workloads.model_packs")
     lock = _hf_lock()
     target = tmp_path / "packs" / "hf-pack"
 
@@ -2063,7 +2063,7 @@ def test_manager_hf_pack_full_cycle(tmp_path, monkeypatch):
 def test_manager_hf_bitrot_unadvertise_rebuild(tmp_path, monkeypatch):
     """Advertised HF pack with corrupted bytes: un-advertised, rebuilt via
     the shared installer, re-advertised — the Argos flow verbatim."""
-    mp = pytest.importorskip("gpu_orchestrator_workloads.model_packs")
+    mp = pytest.importorskip("sparehour_workloads.model_packs")
     lock = _hf_lock()
     target = tmp_path / "packs" / "hf-pack"
     _hf_pack_dir(target)
@@ -2088,7 +2088,7 @@ def test_manager_service_pack_advertised_when_ready(tmp_path):
         json.dumps([{"code": "en", "name": "English"}]).encode(),
         path="/languages",
     )
-    pytest.importorskip("gpu_orchestrator_workloads.libretranslate")
+    pytest.importorskip("sparehour_workloads.libretranslate")
     import importlib.util
 
     if importlib.util.find_spec("httpx") is None:
@@ -2097,7 +2097,7 @@ def test_manager_service_pack_advertised_when_ready(tmp_path):
     try:
         row = _plan_row(
             "plugin",
-            "gpu_orchestrator_workloads.libretranslate:LibreTranslateExecutor",
+            "sparehour_workloads.libretranslate:LibreTranslateExecutor",
             {"LIBRETRANSLATE_ENDPOINT":
              f"http://127.0.0.1:{server.server_port}/translate"},
         )

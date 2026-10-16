@@ -1,4 +1,8 @@
-# dworker video
+# Sparehour Worker historical demo
+
+This footage, poster, and burned-in captions predate the Sparehour rebrand.
+They preserve the previous product names and interface as recorded; see the
+repository README screenshot for the current dashboard.
 
 A real, captioned dashboard demonstration, edited for length. A self-hosted
 NVIDIA worker advertises selected work, claims an actual controller-dispatched
@@ -8,11 +12,11 @@ cold-start or throughput benchmark.
 
 | Video | Duration | Poster | Editable captions |
 | --- | --- | --- | --- |
-| [dworker: compute on your terms](worker-demo.mp4) | 60 seconds | [PNG](worker-demo-poster.png) | [English SRT](worker-demo.srt) |
+| [sparehour-worker: compute on your terms](worker-demo.mp4) | 60 seconds | [PNG](worker-demo-poster.png) | [English SRT](worker-demo.srt) |
 
 The demonstration shows GPU inventory, route eligibility, live Run/Stop
 selection, pause/resume of new claims, GPU execution, and the delivered PNG.
-The [controller demonstration and joint overview](https://github.com/autonomica-xyz/distributed-gpu/tree/main/assets/videos)
+The [controller demonstration and joint overview](https://github.com/autonomica-xyz/sparehour/tree/main/assets/videos)
 are published in the companion repository.
 
 ## Share or embed
@@ -29,5 +33,5 @@ are published in the companion repository.
 ## Licenses
 
 The worker is MIT-licensed and depends on the GPL-3.0-or-later
-`distributed-gpu` package. Model weights have separate license terms and
+`sparehour` package. Model weights have separate license terms and
 are not included with these media assets.

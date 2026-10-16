@@ -1,4 +1,4 @@
-"""Regression tests for dworker.client.WorkerClient transport boundaries.
+"""Regression tests for sparehour_worker.client.WorkerClient transport boundaries.
 
 All offline: httpx.MockTransport handlers stand in for the control plane.
 """
@@ -14,11 +14,11 @@ import threading
 import httpx
 import pytest
 
-from gpu_orchestrator.agent import AgentError, ControlPlaneClient
-from gpu_orchestrator.models import AgentRegistration, SlotInventory
+from sparehour.agent import AgentError, ControlPlaneClient
+from sparehour.models import AgentRegistration, SlotInventory
 
-from dworker.client import WorkerClient
-from dworker.config import ConfigError
+from sparehour_worker.client import WorkerClient
+from sparehour_worker.config import ConfigError
 
 TOKEN = "dgp_testsekrit123"
 ENDPOINT = "http://127.0.0.1:8730"

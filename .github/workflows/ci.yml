@@ -17,21 +17,22 @@ jobs:
       matrix:
         python: ["3.10", "3.12"]
     env:
-      # Pinned control-plane revision (upstream source provenance).
-      CONTROLLER_REPO: autonomica-xyz/distributed-gpu
-      CONTROLLER_REF: a79b927053bc54c06d0e725f0a04841ac0c30355
+      # Publish the matching Sparehour controller cutover first. Pin its commit
+      # through SPAREHOUR_CONTROLLER_REF for reproducible CI after the rollout.
+      CONTROLLER_REPO: autonomica-xyz/sparehour
+      CONTROLLER_REF: ${{ vars.SPAREHOUR_CONTROLLER_REF || 'main' }}
     steps:
       - uses: actions/checkout@v4
         with:
           path: worker
 
-      # The control-plane package is not published; build and test against
-      # the pinned upstream revision checked out into a separate path.
+      # The control-plane package is not published; check out the matching
+      # Sparehour revision into a separate path.
       # If the repository is private, define a PAT with read access in the
       # UPSTREAM_CHECKOUT_TOKEN Actions secret; public checkouts use the
       # built-in GITHUB_TOKEN. No credentials are echoed or persisted beyond
       # the checkout itself.
-      - name: Check out controller (pinned revision)
+      - name: Check out matching controller
         uses: actions/checkout@v4
         with:
           repository: ${{ env.CONTROLLER_REPO }}
@@ -72,18 +73,18 @@ jobs:
           # Controller installed from the pinned source checkout, worker
           # strictly from the built wheel — never the editable checkout.
           "$VENV/bin/python" -m pip install ./controller
-          "$VENV/bin/python" -m pip install "$RUNNER_TEMP"/dist/distributed_worker-*.whl
+          "$VENV/bin/python" -m pip install "$RUNNER_TEMP"/dist/sparehour_worker-*.whl
           cd "$RUNNER_TEMP"
-          "$VENV/bin/dworker" --version
+          "$VENV/bin/sparehour-worker" --version
           "$VENV/bin/python" - <<'PY'
           import http.client
           import threading
           from importlib import resources
 
-          from dworker import dashboard
+          from sparehour_worker import dashboard
 
           # Packaged resource must be present in the installed wheel.
-          html = resources.files("dworker").joinpath("dashboard.html").read_text(
+          html = resources.files("sparehour_worker").joinpath("dashboard.html").read_text(
               encoding="utf-8"
           )
           assert "<" in html, "dashboard.html missing from wheel"

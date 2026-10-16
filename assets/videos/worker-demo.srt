@@ -46,4 +46,4 @@ controller, content-addressed and validated
 10
 00:00:50,000 --> 00:01:00,000
 MIT worker · GPL-3.0-or-later controller
-github.com/autonomica-xyz/distributed-worker
+github.com/autonomica-xyz/sparehour-worker

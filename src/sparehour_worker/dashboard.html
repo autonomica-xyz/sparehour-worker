@@ -1,0 +1,760 @@
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>sparehour worker</title>
+<style>
+  /* sparehour worker dashboard — autonomica palette, warm typography.
+     Self-contained: system font stacks only, no external assets. */
+  :root {
+    --font: "Inter", ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
+    --mono: ui-monospace, "SF Mono", SFMono-Regular, Menlo, Consolas, monospace;
+    --radius: 12px;
+    --radius-sm: 4px;
+    color-scheme: dark;
+    --bg: #07080a;
+    --surface: #0e1014;
+    --raised: #13161b;
+    --line: rgba(255, 255, 255, .08);
+    --line-2: rgba(255, 255, 255, .14);
+    --text: #ece8df;
+    --text-2: #b4bac4;
+    --text-3: #6d737d;
+    --accent: #c8f542;
+    --accent-ink: #0a0c08;
+    --accent-soft: rgba(200, 245, 66, .12);
+    --ok: #56e39f;
+    --ok-soft: rgba(86, 227, 159, .12);
+    --bad: #ff5c5c;
+    --bad-soft: rgba(255, 92, 92, .12);
+    --shadow: 0 40px 80px rgba(0, 0, 0, .5);
+    --primary-bg: #c8f542;
+    --primary-fg: #0a0c08;
+    --knob-on: #0a0c08;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; }
+  body {
+    font: 14px/1.5 var(--font);
+    color: var(--text);
+    -webkit-font-smoothing: antialiased;
+    font-feature-settings: "cv11", "ss01";
+    background:
+      radial-gradient(640px 420px at 32% -6%, rgba(200, 245, 66, .055), transparent 70%),
+      var(--bg) fixed;
+  }
+  a { color: inherit; text-decoration: none; }
+  code, .mono { font-family: var(--mono); font-size: .92em; }
+  .tnum { font-variant-numeric: tabular-nums; }
+  .muted { color: var(--text-2); }
+  .faint { color: var(--text-3); }
+  .hidden { display: none !important; }
+
+  /* ---------- Mark ---------- */
+  .mark { width: 20px; height: 20px; flex: none; display: block; }
+  .mark .ring { fill: none; stroke: currentColor; stroke-width: 1.8; }
+  .mark .hour { fill: var(--accent); }
+  .brand { display: flex; align-items: center; gap: 9px; font-weight: 600; letter-spacing: -.015em; font-size: 15px; }
+  .brand .role { font-weight: 400; color: var(--text-2); letter-spacing: 0; }
+
+  /* ---------- Top bar ---------- */
+  .topbar { border-bottom: 1px solid rgba(255, 255, 255, .05); background: rgba(7, 8, 10, .88); backdrop-filter: blur(20px); position: sticky; top: 0; z-index: 10; }
+  .topbar .inner { max-width: 1120px; margin: 0 auto; padding: 0 32px; height: 56px; display: flex; align-items: center; gap: 28px; }
+  .topbar .spacer { flex: 1; }
+  .topbar .who { font-size: 13px; color: var(--text-2); display: flex; align-items: center; gap: 8px; min-width: 0; }
+  .topbar .who .ep { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+  /* ---------- Page ---------- */
+  .page { max-width: 1120px; margin: 0 auto; padding: 40px 32px 120px; }
+  .section { margin-top: 44px; }
+  .page > .section:first-child { margin-top: 0; }
+  .section-head { display: flex; align-items: baseline; gap: 10px; margin-bottom: 14px; flex-wrap: wrap; }
+  .section-head h2 { font-size: 14px; font-weight: 600; margin: 0; letter-spacing: -.005em; }
+  .section-head .hint { font-size: 13px; color: var(--text-3); }
+  .section-head .actions { margin-left: auto; display: flex; gap: 8px; align-items: center; }
+
+  /* ---------- Surfaces ---------- */
+  .card { background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius); }
+
+  /* ---------- Hero ---------- */
+  .hero { display: flex; align-items: center; gap: 28px; padding: 28px 30px; }
+  .hero .state { display: flex; align-items: center; gap: 12px; }
+  .hero h1 { font-size: 24px; font-weight: 600; letter-spacing: -.02em; margin: 0; }
+  .hero p { margin: 6px 0 0; color: var(--text-2); max-width: 560px; }
+  .hero .actions { margin-left: auto; display: flex; gap: 8px; flex: none; }
+
+  /* ---------- Metrics strip ---------- */
+  .metrics { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius); }
+  .metric { padding: 18px 22px 20px; border-left: 1px solid var(--line); }
+  .metric:first-child { border-left: 0; }
+  .metric .label { font-size: 12.5px; color: var(--text-2); }
+  .metric .value { font-size: 28px; font-weight: 500; letter-spacing: -.02em; margin-top: 6px; line-height: 1.1; font-variant-numeric: tabular-nums; }
+  .metric .hint { font-size: 12.5px; color: var(--text-3); margin-top: 6px; }
+  .metric.alert .value { color: var(--bad); }
+
+  /* ---------- Status ---------- */
+  .dot { width: 8px; height: 8px; border-radius: 50%; display: inline-block; flex: none; background: var(--text-3); }
+  .dot.running { background: var(--accent); box-shadow: 0 0 10px var(--accent); }
+  .dot.ok { background: var(--ok); }
+  .dot.bad { background: var(--bad); }
+  .dot.pending { background: transparent; box-shadow: inset 0 0 0 1.5px var(--text-3); }
+  .dot.off { background: var(--line-2); }
+  .status { display: inline-flex; align-items: center; gap: 8px; font-size: 13px; color: var(--text-2); white-space: nowrap; }
+  .status.running { color: var(--text); }
+  .status.bad { color: var(--bad); }
+
+  /* ---------- Buttons ---------- */
+  .btn { display: inline-flex; align-items: center; gap: 7px; height: 32px; padding: 0 13px; border-radius: var(--radius-sm); border: 1px solid var(--line-2); background: var(--surface); color: var(--text); font: 500 13px var(--font); cursor: pointer; transition: background .15s, border-color .15s; white-space: nowrap; }
+  .btn:hover { background: var(--raised); border-color: var(--text-3); }
+  .btn.primary { background: var(--primary-bg); color: var(--primary-fg); border-color: var(--primary-bg); }
+  .btn.primary:hover { opacity: 1; filter: brightness(1.1); }
+  .btn.danger { color: var(--bad); }
+  .btn:disabled { opacity: .4; cursor: not-allowed; }
+  .btn svg { width: 15px; height: 15px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
+
+  /* ---------- Toggle ---------- */
+  .toggle { position: relative; width: 34px; height: 20px; flex: none; border-radius: 999px; background: var(--line-2); border: 0; cursor: pointer; transition: background .2s; padding: 0; }
+  .toggle::after { content: ""; position: absolute; top: 2px; left: 2px; width: 16px; height: 16px; border-radius: 50%; background: var(--surface); box-shadow: 0 1px 2px rgba(0,0,0,.25); transition: transform .2s; }
+  .toggle[aria-checked="true"] { background: var(--accent); }
+  .toggle[aria-checked="true"]::after { transform: translateX(14px); background: var(--knob-on); }
+  .toggle:disabled { opacity: .35; cursor: not-allowed; }
+
+  /* ---------- Tags ---------- */
+  .tag { display: inline-flex; align-items: center; font: 12px var(--mono); color: var(--text-2); background: var(--raised); border: 1px solid var(--line); border-radius: 5px; padding: 1px 7px; white-space: nowrap; }
+  .tags { display: flex; flex-wrap: wrap; gap: 5px; }
+
+  /* ---------- Inputs ---------- */
+  .segmented { display: inline-flex; padding: 3px; background: var(--raised); border: 1px solid var(--line); border-radius: 9px; gap: 2px; }
+  .segmented button { border: 0; background: transparent; color: var(--text-2); font: 500 12.5px var(--font); padding: 5px 11px; border-radius: 6px; cursor: pointer; }
+  .segmented button.on { background: var(--surface); color: var(--text); box-shadow: 0 1px 2px rgba(0,0,0,.15), 0 0 0 1px var(--line); }
+  .segmented button .n { color: var(--text-3); margin-left: 5px; font-variant-numeric: tabular-nums; }
+
+  /* ---------- Slots ---------- */
+  .slots { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 12px; }
+  .slot { padding: 18px 20px 16px; display: grid; gap: 14px; align-content: start; }
+  .slot .top { display: flex; align-items: flex-start; gap: 12px; }
+  .slot .name { font-weight: 500; }
+  .slot .hw { font-size: 12.5px; color: var(--text-3); margin-top: 2px; }
+  .slot .top .status { margin-left: auto; }
+  .slot .job { font-size: 13px; display: flex; justify-content: space-between; gap: 10px; align-items: baseline; }
+  .slot .job .id { color: var(--text-3); font-family: var(--mono); font-size: 12px; }
+  .slot .idle-line { font-size: 13px; color: var(--text-3); }
+  .working-line { height: 2px; border-radius: 2px; background: var(--line); overflow: hidden; position: relative; }
+  .working-line.on::after { content: ""; position: absolute; inset: 0; width: 35%; background: linear-gradient(90deg, transparent, var(--accent), transparent); animation: sweep 2.2s ease-in-out infinite; }
+  @keyframes sweep { from { transform: translateX(-100%); } to { transform: translateX(290%); } }
+
+  /* ---------- Workloads ---------- */
+  .wl-group { border-top: 1px solid var(--line); }
+  .wl-group:first-child { border-top: 0; }
+  .wl-cap { display: grid; grid-template-columns: 1fr auto auto; gap: 14px; align-items: center; padding: 14px 22px; }
+  .wl-cap .t { font-weight: 500; }
+  .wl-cap .d { font-size: 12.5px; color: var(--text-3); margin-top: 1px; }
+  .wl-cap .capname { font-family: var(--mono); font-size: 12px; }
+  .wl-rows { border-top: 1px solid var(--line); }
+  .wl-row { display: grid; grid-template-columns: minmax(200px, 1.1fr) 1.6fr minmax(160px, 1fr); gap: 20px; align-items: center; padding: 12px 22px 12px 40px; }
+  .wl-row + .wl-row { border-top: 1px solid var(--line); }
+  .wl-row .t { font-weight: 500; font-size: 13.5px; }
+  .wl-row .d { font-size: 12.5px; color: var(--text-3); margin-top: 2px; }
+  .wl-row .why { font-size: 13px; color: var(--text-2); }
+  .wl-group.off .wl-rows, .wl-group.off .wl-cap .d { opacity: .55; }
+  .wl-row.no .t, .wl-row.no .tags, .wl-row.no .d { opacity: .55; }
+  details.more summary { cursor: pointer; font-size: 12.5px; color: var(--text-3); list-style: none; margin-top: 4px; }
+  details.more summary::-webkit-details-marker { display: none; }
+  details.more summary::before { content: "▸ "; }
+  details.more[open] summary::before { content: "▾ "; }
+  details.more summary:hover { color: var(--text-2); }
+  details.more code { display: block; margin-top: 6px; color: var(--text-2); font-size: 12px; word-break: break-all; white-space: pre-wrap; }
+  details.route-more > summary { padding: 12px 40px; border-top: 1px solid var(--line); }
+  .empty { padding: 18px 22px; color: var(--text-3); font-size: 13.5px; }
+
+  /* ---------- This machine ---------- */
+  .env { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); }
+  .env > div { padding: 18px 22px; border-left: 1px solid var(--line); min-width: 0; }
+  .env > div:first-child { border-left: 0; }
+  .env .label { font-size: 12.5px; color: var(--text-2); margin-bottom: 8px; }
+  .env .v { font-size: 13.5px; display: flex; align-items: center; gap: 8px; min-width: 0; }
+  .env .v + .v { margin-top: 4px; }
+  .env .v .wrap { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .env .sub { font-size: 12.5px; color: var(--text-3); margin-top: 6px; }
+  .pf { list-style: none; margin: 8px 0 0; padding: 0; font-size: 12.5px; color: var(--text-3); }
+  .pf li { padding: 2px 0; word-break: break-word; }
+
+  /* ---------- Activity ---------- */
+  .feed { list-style: none; margin: 0; padding: 0; }
+  .feed li { display: grid; grid-template-columns: 72px 14px 1fr; gap: 10px; align-items: baseline; padding: 9px 0; font-size: 13.5px; border-bottom: 1px solid var(--line); }
+  .feed li:last-child { border-bottom: 0; }
+  .feed time { color: var(--text-3); font-family: var(--mono); font-size: 12px; }
+  .feed .dot { transform: translateY(-1px); }
+
+  /* ---------- Toast ---------- */
+  .toast { position: fixed; left: 50%; bottom: 40px; transform: translate(-50%, 12px); background: var(--accent); color: var(--accent-ink); font-size: 13px; font-weight: 500; padding: 9px 16px; border-radius: 999px; opacity: 0; transition: opacity .2s, transform .2s; pointer-events: none; z-index: 40; }
+  .toast.show { opacity: 1; transform: translate(-50%, 0); }
+
+  body[data-state="offline"] .dim-when-offline { opacity: .35; pointer-events: none; filter: saturate(.4); }
+
+  @media (max-width: 860px) {
+    .topbar .inner { padding: 12px 18px; gap: 12px; height: auto; min-height: 56px; flex-wrap: wrap; }
+    .topbar .who { flex: 0 0 100%; min-width: 0; }
+    #conn { min-width: 0; flex: 1; }
+    #conn .ep { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    #agent { max-width: 45%; overflow: hidden; text-overflow: ellipsis; }
+    .slots { grid-template-columns: minmax(0, 1fr); }
+    .slot .job span { min-width: 0; overflow-wrap: anywhere; }
+    .page { padding: 24px 18px 96px; }
+    .hero { flex-direction: column; align-items: flex-start; gap: 16px; padding: 22px; }
+    .hero .actions { margin-left: 0; }
+    .wl-cap { grid-template-columns: 1fr auto; }
+    .wl-row { grid-template-columns: 1fr; gap: 8px; padding: 14px 18px 14px 30px; }
+    .env > div { border-left: 0; border-top: 1px solid var(--line); }
+    .env > div:first-child { border-top: 0; }
+    .metric { border-left: 0; border-top: 1px solid var(--line); }
+    .metric:first-child { border-top: 0; }
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    *, *::before, *::after { animation: none !important; transition: none !important; }
+  }
+</style>
+</head>
+<body data-state="unknown">
+
+<header class="topbar">
+  <div class="inner">
+    <div class="brand"><svg class="mark" viewBox="0 0 24 24" aria-hidden="true"><circle class="ring" cx="12" cy="12" r="9"/><path class="hour" d="M12 12V3a9 9 0 0 1 4.5 1.206Z"/></svg>sparehour <span class="role">worker</span></div>
+    <div class="spacer"></div>
+    <div class="who">
+      <span class="status" id="conn"><span class="dot pending"></span><span class="ep">Connecting</span></span>
+      <span class="faint">·</span>
+      <span class="mono" id="agent"></span>
+    </div>
+  </div>
+</header>
+
+<main class="page">
+
+  <section class="section">
+    <div class="card hero">
+      <div>
+        <div class="state"><span class="dot pending" id="hero-dot"></span><h1 id="hero-title">Connecting</h1></div>
+        <p id="hero-sub">Reading worker status…</p>
+      </div>
+      <div class="actions" id="hero-actions">
+        <button class="btn" id="pause" disabled>Pause</button>
+      </div>
+    </div>
+  </section>
+
+  <div class="dim-when-offline">
+
+  <section class="section" style="margin-top:14px">
+    <div class="metrics" id="metrics"></div>
+  </section>
+
+  <section class="section">
+    <div class="section-head"><h2>Slots</h2><span class="hint">one job per slot</span></div>
+    <div class="slots" id="slots"></div>
+  </section>
+
+  <section class="section">
+    <div class="section-head">
+      <h2>Workloads</h2><span class="hint">turn on the work this machine should take</span>
+      <div class="actions"><div class="segmented" id="wl-filter" role="group" aria-label="Filter workloads">
+        <button class="on" data-f="all">All</button><button data-f="on">On<span class="n">0</span></button><button data-f="compatible">Compatible<span class="n">0</span></button>
+      </div></div>
+    </div>
+    <div class="card" id="wl"><div class="empty">Loading workloads…</div></div>
+  </section>
+
+  <section class="section">
+    <div class="section-head"><h2>This machine</h2>
+      <div class="actions"><button class="btn" id="prefetch-btn" disabled><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3v12M7 10l5 5 5-5M5 21h14"/></svg>Prefetch images</button></div>
+    </div>
+    <div class="card env">
+      <div><div class="label">When to work</div><div id="env-idle" class="v">—</div><div class="sub" id="env-idle-sub"></div></div>
+      <div><div class="label">Selection</div><div id="env-sel" class="v">—</div><div class="sub" id="env-sel-sub"></div></div>
+      <div><div class="label">Docker</div><div id="env-docker" class="v">—</div><div class="sub">Needed for container routes</div></div>
+      <div><div class="label">Model packs</div><div id="env-packs" class="v">—</div></div>
+      <div><div class="label">Prefetch</div><ul class="pf" id="prefetch-list"><li>never run</li></ul></div>
+    </div>
+  </section>
+
+  <section class="section">
+    <div class="section-head"><h2>Activity</h2></div>
+    <div class="card" style="padding: 6px 22px">
+      <ul class="feed" id="notes"><li><span class="faint" style="grid-column:1/-1">—</span></li></ul>
+    </div>
+  </section>
+
+  </div>
+</main>
+
+<div class="toast" id="toast" role="status"></div>
+
+<script>
+'use strict';
+let state = null;
+let live = false;          // true once an authenticated status render succeeded
+let filter = 'all';
+let toastTimer = null;
+
+// Access token arrives in the URL fragment (never in the query string and
+// never in the served HTML). Move it to sessionStorage and strip it from the
+// address bar so it can't leak via history, bookmarks, or screenshots.
+let token = sessionStorage.getItem('sparehour-worker-dashboard-token') || '';
+const frag = location.hash.length > 1 ? decodeURIComponent(location.hash.slice(1)) : '';
+if (frag) {
+  token = frag;
+  sessionStorage.setItem('sparehour-worker-dashboard-token', token);
+  history.replaceState(null, '', location.pathname + location.search);
+}
+
+function authHeaders(extra) {
+  return Object.assign({'Authorization': 'Bearer ' + token}, extra || {});
+}
+function esc(s) {
+  return String(s ?? '').replace(/[&<>"]/g, c => ({'&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;'}[c]));
+}
+function toast(text) {
+  const el = document.getElementById('toast');
+  el.textContent = text;
+  el.classList.add('show');
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => el.classList.remove('show'), 4000);
+}
+function fmtUptime(sec) {
+  sec = Math.max(0, Math.floor(sec || 0));
+  const d = Math.floor(sec / 86400), h = Math.floor(sec % 86400 / 3600), m = Math.floor(sec % 3600 / 60);
+  if (d) return d + ' d ' + h + ' h';
+  if (h) return h + ' h ' + m + ' m';
+  return m + ' min';
+}
+function fmtMB(mb) {
+  const n = Number(mb);
+  if (!isFinite(n) || n <= 0) return '';
+  if (n >= 1024) return (Math.round(n / 1024 * 10) / 10).toString().replace(/\.0$/, '') + ' GB';
+  return n + ' MB';
+}
+
+// Hardware suitability is independent of capability selection and model-pack readiness.
+function routeCompatible(q) {
+  return q.compatible === true;
+}
+function routeCompatReason(q) {
+  return q.compat_reason || q.match_reason || '';
+}
+
+function hero() {
+  // Truthful top-line state. Anything that isn't a live, authenticated
+  // status is "not connected" — never a fabricated working state.
+  const dot = document.getElementById('hero-dot');
+  const title = document.getElementById('hero-title');
+  const sub = document.getElementById('hero-sub');
+  const pause = document.getElementById('pause');
+  const conn = document.getElementById('conn');
+  const agentEl = document.getElementById('agent');
+
+  if (!token) {
+    document.body.dataset.state = 'offline';
+    dot.className = 'dot bad';
+    title.textContent = 'Not connected';
+    sub.textContent = 'Open the link printed by sparehour-worker — it ends in #… and carries this session’s access key.';
+    conn.innerHTML = '<span class="dot bad"></span>No access key';
+    pause.disabled = true;
+    return;
+  }
+  if (!live || !state) {
+    document.body.dataset.state = 'offline';
+    dot.className = 'dot pending';
+    title.textContent = 'Not connected';
+    sub.textContent = live === false && state === null
+      ? 'Waiting for the worker status endpoint…'
+      : 'Status unavailable.';
+    pause.disabled = true;
+    return;
+  }
+
+  const s = state;
+  document.body.dataset.state = 'live';
+  agentEl.textContent = s.agent_id || '';
+  conn.innerHTML = s.endpoint
+    ? '<span class="dot ok"></span><span class="ep">' + esc(s.endpoint) + '</span>'
+    : '<span class="dot bad"></span>No endpoint';
+
+  const slots = Object.entries(s.slots || {});
+  const running = slots.filter(([, i]) => i && i.state === 'running').length;
+
+  if (s.paused) {
+    dot.className = 'dot off';
+    title.textContent = 'Paused';
+    sub.textContent = running
+      ? 'Not taking new jobs. The ' + running + ' running job' + (running === 1 ? '' : 's') + ' will finish.'
+      : 'Not taking new jobs.';
+    pause.disabled = false;
+    pause.className = 'btn primary';
+    pause.textContent = 'Resume';
+    return;
+  }
+  pause.disabled = false;
+  pause.className = 'btn';
+  pause.textContent = 'Pause';
+  if (running) {
+    dot.className = 'dot running';
+    title.textContent = 'Working';
+    sub.textContent = running + ' of ' + slots.length + ' slot' + (slots.length === 1 ? '' : 's') + ' busy. ' +
+      (s.idle_only ? 'Claims jobs only while this machine is idle.' : 'Claims jobs whenever work is queued.');
+  } else if (!slots.length) {
+    dot.className = 'dot pending';
+    title.textContent = 'No slots available';
+    sub.textContent = 'No GPU or CPU slots are configured. Check sparehour-worker doctor.';
+  } else if (!(s.capabilities || []).length && !s.dynamic) {
+    dot.className = 'dot pending';
+    title.textContent = 'Choose workloads';
+    sub.textContent = 'Turn on a workload below to start taking jobs.';
+  } else if (s.idle_only && !s.idle_ok) {
+    dot.className = 'dot pending';
+    title.textContent = 'Waiting for idle';
+    sub.textContent = s.idle_reason || 'This machine is in use; sparehour holds back until it is idle.';
+  } else {
+    dot.className = 'dot ok';
+    title.textContent = 'Ready';
+    sub.textContent = s.idle_only
+      ? 'Idle — claiming work while the machine is unused.'
+      : 'Waiting for a matching job.';
+  }
+}
+
+function offline(message) {
+  live = false;
+  state = null;
+  document.body.dataset.state = 'offline';
+  const conn = document.getElementById('conn');
+  conn.innerHTML = '<span class="dot bad"></span>' + esc(message);
+  document.getElementById('agent').textContent = '';
+  document.getElementById('hero-dot').className = 'dot bad';
+  document.getElementById('hero-title').textContent = 'Not connected';
+  document.getElementById('hero-sub').textContent = message === 'no access key'
+    ? 'Open the link printed by sparehour-worker run. It includes this session’s access key.'
+    : message === 'no valid access key'
+      ? 'This session’s access key was rejected. Reopen the URL printed by sparehour-worker run.'
+      : 'Cannot reach the worker status endpoint: ' + message;
+  document.getElementById('pause').disabled = true;
+  document.getElementById('prefetch-btn').disabled = true;
+  document.querySelectorAll('.toggle').forEach(button => { button.disabled = true; });
+}
+
+function renderMetrics() {
+  const s = state;
+  const running = Object.values(s.slots || {}).filter(i => i && i.state === 'running').length;
+  const caps = (s.capabilities || []).length;
+  document.getElementById('metrics').innerHTML = [
+    {label: 'Jobs finished', value: s.completed ?? 0, hint: 'since this run started'},
+    {label: 'Running now', value: running, hint: running === 1 ? '1 slot busy' : running + ' slots busy'},
+    {label: 'Failed', value: s.failed ?? 0, hint: 'job attempts', alert: (s.failed ?? 0) > 0},
+    {label: 'Uptime', value: fmtUptime(s.uptime_seconds), hint: caps + ' capabilit' + (caps === 1 ? 'y' : 'ies') + ' selected'},
+  ].map(m => '<div class="metric' + (m.alert ? ' alert' : '') + '"><div class="label">' + m.label +
+    '</div><div class="value">' + esc(m.value) + '</div><div class="hint">' + esc(m.hint) + '</div></div>').join('');
+}
+
+function renderSlots() {
+  const entries = Object.entries((state && state.slots) || {});
+  const el = document.getElementById('slots');
+  if (!entries.length) {
+    el.innerHTML = '<div class="card slot"><div class="idle-line">No slots registered.</div></div>';
+    return;
+  }
+  el.innerHTML = entries.map(([id, info]) => {
+    info = info || {};
+    const st = String(info.state || 'idle');
+    let status, line;
+    if (st === 'running') {
+      status = '<span class="status running"><span class="dot running"></span>Running</span>';
+    } else if (st === 'paused') {
+      status = '<span class="status"><span class="dot off"></span>Paused</span>';
+    } else if (st === 'waiting-idle') {
+      status = '<span class="status"><span class="dot pending"></span>Waiting for idle</span>';
+    } else if (st === 'registered') {
+      status = '<span class="status"><span class="dot pending"></span>Registered</span>';
+    } else {
+      status = '<span class="status"><span class="dot pending"></span>' + esc(st === 'idle' ? 'Ready' : st) + '</span>';
+    }
+    if (info.job) {
+      line = '<div class="job"><span>' + esc(info.job.workload) +
+        (info.job.route ? ' <span class="faint">/ ' + esc(info.job.route) + '</span>' : '') +
+        '</span><span class="tnum muted">' +
+        esc(info.job.started_at_seconds ? fmtElapsed(info.job.started_at_seconds) : info.job.started_at || '') + '</span></div>' +
+        '<div class="job"><span class="id">' + esc(info.job.id) + '</span></div>';
+    } else {
+      line = '<div class="idle-line">' +
+        (st === 'paused' ? 'Paused — no new jobs.' :
+         st === 'waiting-idle' ? 'Holding back until this machine is idle.' :
+         st === 'registered' ? 'Advertised; claim loop not started yet.' :
+         'Waiting for a matching job.') + '</div>';
+    }
+    return '<div class="card slot"><div class="top"><div><div class="name" title="' + esc(id) + '">' + esc(info.name || id) + '</div>' +
+      '<div class="hw">' + esc(info.hardware || '') + '</div></div>' + status + '</div>' +
+      '<div class="working-line' + (st === 'running' ? ' on' : '') + '"' + (st === 'running' ? '' : ' style="visibility:hidden"') + '></div>' +
+      line + '</div>';
+  }).join('');
+}
+
+function fmtElapsed(startedAt) {
+  const seconds = Math.max(0, Math.floor(Date.now() / 1000 - startedAt));
+  return Math.floor(seconds / 60) + ':' + String(seconds % 60).padStart(2, '0');
+}
+
+// Group queue rows by advertised capability: one switch per capability turns
+// every route behind it on or off. Compatibility is reported per route —
+// routes sharing a capability can fail for different reasons.
+function groupQueues(queues) {
+  const groups = new Map();
+  for (const q of queues) {
+    const cap = String(q.capability || '(no capability)');
+    if (!groups.has(cap)) groups.set(cap, []);
+    groups.get(cap).push(q);
+  }
+  return [...groups.entries()].map(([cap, rows]) => ({
+    cap,
+    rows,
+    selected: rows.some(q => q.selected),
+    compatible: rows.some(routeCompatible),
+  })).sort((a, b) => a.cap.localeCompare(b.cap));
+}
+
+function renderWorkloads() {
+  const s = state;
+  const groups = groupQueues(s.queues || []);
+  const el = document.getElementById('wl');
+
+  document.querySelector('#wl-filter [data-f="on"] .n').textContent = groups.filter(g => g.selected).length;
+  document.querySelector('#wl-filter [data-f="compatible"] .n').textContent =
+    (s.queues || []).filter(routeCompatible).length;
+
+  if (!groups.length) {
+    el.innerHTML = '<div class="empty">No workloads visible to this token.</div>';
+    return;
+  }
+  el.innerHTML = groups.map(g => {
+    const anyIncompat = g.rows.some(r => !routeCompatible(r));
+    const routeRows = g.rows.map(q => {
+      const compat = routeCompatible(q);
+      const tags = [];
+      if (q.pending_jobs != null) tags.push('<span class="tag">' + esc(q.pending_jobs) + ' queued</span>');
+      for (const p of (q.model_packs || [])) tags.push('<span class="tag">' + esc(p) + '</span>');
+      const detail = [q.executor_type, q.executor_detail].filter(Boolean).map(String).join(' ');
+      const more = detail
+        ? '<details class="more" data-dkey="' + esc(q.workload + '/' + q.route) + '"><summary>Executor</summary><code>' +
+          esc(q.executor_type) + ' ' + esc(q.executor_detail || '') + '</code></details>'
+        : '';
+      let statusCell;
+      if (!compat) {
+        statusCell = '<div class="why">' + esc(routeCompatReason(q) || 'Not compatible') + '</div>';
+      } else if (q.selected && !q.eligible) {
+        // Hardware suits but readiness fails (e.g. a missing model pack).
+        statusCell = '<div class="why"><span class="status"><span class="dot pending"></span>Compatible</span><br>' +
+          '<span class="faint">' + esc(q.match_reason || '') + '</span></div>';
+      } else {
+        statusCell = '<div class="status"><span class="dot ok"></span>Compatible</div>';
+      }
+      const title = q.route;
+      const subline = esc(q.workload) + (q.version ? ' · v' + esc(q.version) : '');
+      return '<div class="wl-row' + (compat ? '' : ' no') + '" data-ok="' + (compat ? 1 : 0) + '">' +
+        '<div><div class="t">' + esc(title) + '</div><div class="d mono">' + subline + '</div></div>' +
+        '<div>' + (tags.length ? '<div class="tags">' + tags.join('') + '</div>' : '') + more + '</div>' +
+        statusCell + '</div>';
+    });
+    const rowsHtml = routeRows.slice(0, 4).join('') + (routeRows.length > 4
+      ? '<details class="more route-more" data-dkey="cap:' + esc(g.cap) + '"><summary>' +
+        (routeRows.length - 4) + ' more route' + (routeRows.length === 5 ? '' : 's') + '</summary>' + routeRows.slice(4).join('') + '</details>'
+      : '');
+    const capSub = g.rows.length + ' route' + (g.rows.length === 1 ? '' : 's') +
+      (anyIncompat ? ' · some routes incompatible' : '');
+    const toggle = '<button class="toggle" role="switch" data-cap="' + esc(g.cap) + '"' +
+      ' aria-checked="' + (g.selected ? 'true' : 'false') + '" aria-label="' + esc(g.cap) + ' jobs"' +
+      (g.compatible || g.selected ? '' : ' disabled') + '></button>';
+    return '<div class="wl-group' + (g.selected ? '' : ' off') + '" data-on="' + (g.selected ? 1 : 0) +
+      '" data-ok="' + (g.compatible ? 1 : 0) + '">' +
+      '<div class="wl-cap"><div><div class="t capname">' + esc(g.cap) + '</div>' +
+      '<div class="d">' + esc(capSub) + '</div></div>' +
+      (g.selected ? '<span class="status"><span class="dot ok"></span>On</span>' : '<span class="status"><span class="dot off"></span>Off</span>') +
+      toggle + '</div>' +
+      '<div class="wl-rows">' + rowsHtml + '</div></div>';
+  }).join('');
+  applyFilter();
+}
+
+function applyFilter() {
+  document.querySelectorAll('#wl-filter button').forEach(b => b.classList.toggle('on', b.dataset.f === filter));
+  document.querySelectorAll('#wl .wl-group').forEach(g => {
+    let show;
+    if (filter === 'all') show = true;
+    else if (filter === 'on') show = g.dataset.on === '1';
+    else show = g.querySelector('.wl-row[data-ok="1"]') !== null;
+    g.classList.toggle('hidden', !show);
+    if (show && filter === 'compatible') {
+      g.querySelectorAll('.wl-row').forEach(r => r.classList.toggle('hidden', r.dataset.ok !== '1'));
+    } else {
+      g.querySelectorAll('.wl-row').forEach(r => r.classList.toggle('hidden', false));
+    }
+    const more = g.querySelector('details.route-more');
+    if (more) {
+      const count = [...more.querySelectorAll('.wl-row')].filter(r => !r.classList.contains('hidden')).length;
+      more.classList.toggle('hidden', count === 0);
+      more.querySelector('summary').textContent = count + ' more route' + (count === 1 ? '' : 's');
+    }
+  });
+}
+
+function renderMachine() {
+  const s = state;
+  const idleEl = document.getElementById('env-idle');
+  const idleSub = document.getElementById('env-idle-sub');
+  if (s.idle_only) {
+    idleEl.innerHTML = '<span class="dot ' + (s.idle_ok ? 'ok' : 'pending') + '"></span>Only when this machine is idle';
+    idleSub.textContent = s.idle_ok
+      ? 'Idle now — claiming work'
+      : (s.idle_reason || 'Holding back while the machine is in use');
+  } else {
+    idleEl.innerHTML = 'Whenever work is queued';
+    idleSub.textContent = 'idle_only is off';
+  }
+  document.getElementById('env-sel').textContent = s.dynamic ? 'Dynamic' : 'Manual';
+  document.getElementById('env-sel-sub').textContent = s.dynamic
+    ? 'The dynamic manager re-decides each cycle from queue depth'
+    : 'Toggled here or with sparehour-worker select';
+  document.getElementById('env-docker').innerHTML = s.docker
+    ? '<span class="dot ok"></span>Available'
+    : '<span class="dot bad"></span>Missing';
+  const packs = s.model_packs || [];
+  document.getElementById('env-packs').innerHTML = packs.length
+    ? packs.map(p => '<span class="v"><span class="dot ok"></span><span class="wrap">' + esc(p) + '</span></span>').join('')
+    : '<span class="faint">None installed</span>';
+  const log = s.prefetch_log || [];
+  document.getElementById('prefetch-list').innerHTML = log.length
+    ? log.map(l => '<li>' + esc(l) + '</li>').join('')
+    : '<li>never run</li>';
+  const btn = document.getElementById('prefetch-btn');
+  btn.disabled = !live || !!s.prefetch_running;
+  btn.innerHTML = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3v12M7 10l5 5 5-5M5 21h14"/></svg>' +
+    (s.prefetch_running ? 'Prefetching…' : 'Prefetch images');
+}
+
+function renderNotes() {
+  const notes = (state && state.notes) || [];
+  document.getElementById('notes').innerHTML = notes.length
+    ? notes.map(n => {
+        const m = /^(\d\d:\d\d:\d\d)\s+(.*)$/.exec(String(n));
+        const time = m ? m[1] : '';
+        const text = m ? m[2] : String(n);
+        let cls = 'off';
+        if (/claimed|started/i.test(text)) cls = 'running';
+        else if (/completed|registered|resumed|finished/i.test(text)) cls = 'ok';
+        else if (/fail|error|reject|denied/i.test(text)) cls = 'bad';
+        return '<li><time>' + esc(time) + '</time><span class="dot ' + cls + '"></span><span>' + esc(text) + '</span></li>';
+      }).join('')
+    : '<li><span class="faint" style="grid-column:1/-1">No activity yet.</span></li>';
+}
+
+// Keep open executor disclosures and the focused control across re-renders.
+function preserveDom(fn) {
+  const open = new Set([...document.querySelectorAll('#wl details.more[open]')]
+    .map(d => d.dataset.dkey).filter(Boolean));
+  const active = document.activeElement;
+  const activeCap = active && active.dataset ? active.dataset.cap : null;
+  const activeId = active ? active.id : '';
+  fn();
+  for (const key of open) {
+    const d = document.querySelector('#wl details.more[data-dkey="' + CSS.escape(key) + '"]');
+    if (d) d.open = true;
+  }
+  let target = null;
+  if (activeId) target = document.getElementById(activeId);
+  if (!target && activeCap) target = document.querySelector('#wl .toggle[data-cap="' + CSS.escape(activeCap) + '"]');
+  if (target && typeof target.focus === 'function') target.focus({preventScroll: true});
+}
+
+function render() {
+  if (!state) return;
+  hero();
+  preserveDom(() => {
+    renderMetrics();
+    renderSlots();
+    renderWorkloads();
+    renderMachine();
+    renderNotes();
+  });
+}
+
+async function refresh() {
+  if (!token) { offline('no access key'); return; }
+  try {
+    const r = await fetch('/api/status', {headers: authHeaders(), cache: 'no-store'});
+    if (r.status === 401 || r.status === 403) { offline('no valid access key'); return; }
+    if (!r.ok) throw new Error('HTTP ' + r.status);
+    const payload = await r.json();
+    if (!payload || payload.error) throw new Error((payload && payload.error) || 'bad status payload');
+    state = payload;
+    live = true;
+    render();
+  } catch (e) {
+    offline((e && e.message) || 'control loop down?');
+  }
+}
+
+document.getElementById('pause').addEventListener('click', async () => {
+  if (!token) { toast('No access key — reopen the URL printed by sparehour-worker'); return; }
+  if (!live || !state) return;
+  const want = !state.paused;
+  try {
+    const r = await fetch('/api/pause', {method: 'POST', headers: authHeaders({'Content-Type': 'application/json'}),
+      body: JSON.stringify({paused: want})});
+    const body = await r.json().catch(() => ({}));
+    if (!r.ok) { toast('pause failed: ' + (body.error || ('HTTP ' + r.status))); return; }
+    toast(want ? 'Paused. Running jobs will finish.' : 'Resumed');
+    refresh();
+  } catch (e) { toast('pause failed: ' + ((e && e.message) || e)); }
+});
+
+document.getElementById('prefetch-btn').addEventListener('click', async () => {
+  if (!token) { toast('No access key — reopen the URL printed by sparehour-worker'); return; }
+  try {
+    const r = await fetch('/api/prefetch', {method: 'POST', headers: authHeaders({'Content-Type': 'application/json'}), body: '{}'});
+    const body = await r.json().catch(() => ({}));
+    if (!r.ok) { toast('prefetch: ' + (body.error || body.message || ('HTTP ' + r.status))); return; }
+    toast(body.message || 'prefetch started');
+    refresh();
+  } catch (e) { toast('prefetch failed: ' + ((e && e.message) || e)); }
+});
+
+// Capability switches: one switch advertises/drops every route behind the
+// capability. Running jobs are never interrupted by deselecting.
+document.getElementById('wl').addEventListener('click', async ev => {
+  const t = ev.target.closest('.toggle');
+  if (!t || t.disabled) return;
+  if (!token) { toast('No access key — reopen the URL printed by sparehour-worker'); return; }
+  if (!live) { toast('Worker status unavailable — cannot change selection'); return; }
+  const want = t.getAttribute('aria-checked') !== 'true';
+  try {
+    const r = await fetch('/api/select', {method: 'POST', headers: authHeaders({'Content-Type': 'application/json'}),
+      body: JSON.stringify({capability: t.dataset.cap, selected: want})});
+    const body = await r.json().catch(() => ({}));
+    if (!r.ok) { toast(body.message || body.error || ('rejected (HTTP ' + r.status + ')')); return; }
+    toast(want
+      ? 'Now taking ' + t.dataset.cap + ' jobs'
+      : 'Stopped taking ' + t.dataset.cap + ' jobs. Running jobs will finish.');
+    setTimeout(refresh, 400);
+  } catch (e) { toast('select failed: ' + ((e && e.message) || e)); }
+});
+
+document.getElementById('wl-filter').addEventListener('click', e => {
+  const b = e.target.closest('button[data-f]');
+  if (!b) return;
+  filter = b.dataset.f;
+  applyFilter();
+});
+
+if (!token) offline('no access key');
+setInterval(refresh, 2000);
+refresh();
+</script>
+</body>
+</html>

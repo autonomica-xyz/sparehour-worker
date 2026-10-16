@@ -46,7 +46,7 @@ DEFAULTS: dict[str, Any] = {
     "dynamic": False,
     "dynamic_poll_seconds": 60,
     "model_catalog": "",
-    "workdir": "~/.local/state/dworker/work",
+    "workdir": "~/.local/state/sparehour/worker/work",
     "dashboard": True,
     "dashboard_host": "127.0.0.1",
     "dashboard_port": 7788,
@@ -342,11 +342,11 @@ def validate(config: dict[str, Any]) -> dict[str, Any]:
 
 
 def config_path() -> Path:
-    root = os.environ.get("DWORKER_CONFIG")
+    root = os.environ.get("SPAREHOUR_WORKER_CONFIG")
     if root:
         return Path(root)
     base = os.environ.get("XDG_CONFIG_HOME") or str(Path.home() / ".config")
-    return Path(base) / "dworker" / "config.json"
+    return Path(base) / "sparehour" / "worker.json"
 
 
 def load(path: Path | None = None) -> dict[str, Any]:

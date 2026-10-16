@@ -25,14 +25,14 @@ from typing import Any
 
 import httpx
 import pytest
-from gpu_orchestrator.agent import AgentError
-from gpu_orchestrator.models import SlotInventory
-from gpu_orchestrator_workloads.argos_pack import build_model_pack_from_lock
+from sparehour.agent import AgentError
+from sparehour.models import SlotInventory
+from sparehour_workloads.argos_pack import build_model_pack_from_lock
 
-from dworker import cli
-from dworker import config as config_mod
-from dworker import dynamic as dyn
-from dworker import runner as runner_mod
+from sparehour_worker import cli
+from sparehour_worker import config as config_mod
+from sparehour_worker import dynamic as dyn
+from sparehour_worker import runner as runner_mod
 
 TOKEN = "test-token-0123456789abcdef"
 ENDPOINT = "https://controller.example.com"
@@ -384,7 +384,7 @@ def _command_job(job_id="job-1", delay=0.0):
     script = (
         "import os, time\n"
         f"time.sleep({delay!r})\n"
-        "open(os.environ['DGPU_OUTPUT_MANIFEST'], 'w').write('{\"files\": []}')\n"
+        "open(os.environ['SPAREHOUR_OUTPUT_MANIFEST'], 'w').write('{\"files\": []}')\n"
     )
     return {
         "id": job_id,
@@ -553,7 +553,7 @@ class FakeServer:
 
 
 def _patch_dashboard(monkeypatch, server_or_error):
-    import dworker.dashboard as dashboard_mod
+    import sparehour_worker.dashboard as dashboard_mod
 
     def make_server(**kw):
         if isinstance(server_or_error, BaseException):
@@ -589,7 +589,7 @@ def test_unsafe_dashboard_host_rejected_before_any_work(
 
     calls = []
 
-    import dworker.dashboard as dashboard_mod
+    import sparehour_worker.dashboard as dashboard_mod
 
     monkeypatch.setattr(
         dashboard_mod, "make_server", lambda **kw: calls.append(kw)

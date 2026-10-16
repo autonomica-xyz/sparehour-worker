@@ -1,4 +1,4 @@
-"""Offline checks for dworker core logic. No control plane, no GPU needed."""
+"""Offline checks for sparehour-worker core logic. No control plane, no GPU needed."""
 
 from __future__ import annotations
 
@@ -7,9 +7,9 @@ from pathlib import Path
 
 import pytest
 
-from dworker import config as config_mod
-from dworker import queues as queues_mod
-from dworker.hardware import discover_amd_slots
+from sparehour_worker import config as config_mod
+from sparehour_worker import queues as queues_mod
+from sparehour_worker.hardware import discover_amd_slots
 
 
 def _slot(**overrides):
@@ -148,9 +148,9 @@ def test_config_load_ignores_unknown_keys(tmp_path: Path):
 
 from pathlib import Path as _P  # noqa: E402
 
-from gpu_orchestrator.models import SlotInventory  # noqa: E402
+from sparehour.models import SlotInventory  # noqa: E402
 
-from dworker import dynamic as dyn  # noqa: E402
+from sparehour_worker import dynamic as dyn  # noqa: E402
 
 
 def _inv(**overrides):

@@ -31,7 +31,7 @@ from typing import Any
 import certifi
 import httpx
 
-from gpu_orchestrator.agent import AgentError, ControlPlaneClient
+from sparehour.agent import AgentError, ControlPlaneClient
 
 from . import config as config_mod
 

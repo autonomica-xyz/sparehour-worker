@@ -52,7 +52,7 @@ from pathlib import Path, PurePosixPath
 from typing import Any
 from urllib.parse import urlparse
 
-from gpu_orchestrator_workloads.argos_pack import (
+from sparehour_workloads.argos_pack import (
     MAX_ARCHIVE_BYTES,
     build_model_pack_from_lock,
 )
@@ -81,7 +81,7 @@ _TERMINATE_GRACE_SECONDS = 2.0
 # Known pack formats in lock-catalog entries. Missing "format" means the
 # legacy Argos archive shape; "huggingface" entries pin model_id to an
 # immutable 40-hex revision and install through
-# gpu_orchestrator_workloads.model_packs. Anything else is recognized as a
+# sparehour_workloads.model_packs. Anything else is recognized as a
 # deliberate catalog entry but never provisioned or advertised.
 _PACK_FORMATS = ("argos", "huggingface")
 
@@ -108,15 +108,15 @@ _IDENTITY_PINS: tuple[tuple[str, str, str], ...] = (
 # applies to one handler, so sibling executors sharing a module can carry
 # different runtime images.
 _PLUGIN_DEPENDENCIES: dict[str, tuple[str, ...]] = {
-    "gpu_orchestrator_workloads.argos_translate": ("ctranslate2", "sentencepiece"),
-    "gpu_orchestrator_workloads.sdxl": ("torch", "diffusers"),
-    "gpu_orchestrator_workloads.libretranslate": ("httpx",),
-    "gpu_orchestrator_workloads.transcription:ParakeetExecutor": (
+    "sparehour_workloads.argos_translate": ("ctranslate2", "sentencepiece"),
+    "sparehour_workloads.sdxl": ("torch", "diffusers"),
+    "sparehour_workloads.libretranslate": ("httpx",),
+    "sparehour_workloads.transcription:ParakeetExecutor": (
         "nemo",
         "torch",
         "lightning",
     ),
-    "gpu_orchestrator_workloads.transcription:WhisperXExecutor": (
+    "sparehour_workloads.transcription:WhisperXExecutor": (
         "whisperx",
         "torch",
         "torchaudio",
@@ -127,7 +127,7 @@ _PLUGIN_DEPENDENCIES: dict[str, tuple[str, ...]] = {
         "soundfile",
         "nltk",
     ),
-    "gpu_orchestrator_workloads.qwen": ("httpx",),
+    "sparehour_workloads.qwen": ("httpx",),
 }
 
 # Bounds for the docker daemon probe: an installed binary means nothing when
@@ -438,21 +438,21 @@ def _provision_blocker(target: Path, lock: dict[str, Any]) -> str | None:
         return None  # absent: nothing to protect, build is allowed
     if not stat.S_ISDIR(info.st_mode):  # files and symlinks are foreign
         return (
-            f"{target} already exists and is not a verified dworker pack for "
+            f"{target} already exists and is not a verified sparehour-worker pack for "
             f"{lock.get('model_pack')!r}; refusing to remove or overwrite it — "
             "clear the path manually or pin a different ARGOS_MODEL_DIR"
         )
     manifest = _pack_manifest(target)
     if manifest is None or not _manifest_identifies(manifest, lock):
         return (
-            f"{target} already exists and is not a verified dworker pack for "
+            f"{target} already exists and is not a verified sparehour-worker pack for "
             f"{lock.get('model_pack')!r}; refusing to remove or overwrite it — "
             "clear the path manually or pin a different ARGOS_MODEL_DIR"
         )
     unmanaged = _first_unmanaged_entry(target, manifest)
     if unmanaged is not None:
         return (
-            f"{target} is a dworker pack for {lock.get('model_pack')!r} but holds "
+            f"{target} is a sparehour-worker pack for {lock.get('model_pack')!r} but holds "
             f"unmanaged content at {unmanaged}; refusing to replace it — "
             "clear the entry or pin a different ARGOS_MODEL_DIR"
         )
@@ -669,10 +669,10 @@ def _plugin_runnable(
             present = False
         if not present:
             return False, f"{module_name} needs optional dependency {dependency}"
-    if module_name == "gpu_orchestrator_workloads.libretranslate":
+    if module_name == "sparehour_workloads.libretranslate":
         endpoint = environment.get("LIBRETRANSLATE_ENDPOINT")
         if not endpoint:
-            from gpu_orchestrator_workloads import libretranslate
+            from sparehour_workloads import libretranslate
 
             endpoint = libretranslate.DEFAULT_ENDPOINT
         return _http_endpoint_runnable(str(endpoint), stop)
@@ -713,9 +713,9 @@ def _service_probe_spec(
         return {"kind": "http", "url": detail}
     if executor_type != "plugin":
         return None
-    if detail.startswith("gpu_orchestrator_workloads.libretranslate:"):
+    if detail.startswith("sparehour_workloads.libretranslate:"):
         try:
-            from gpu_orchestrator_workloads import libretranslate
+            from sparehour_workloads import libretranslate
         except ImportError:
             return None
         endpoint = environment.get("LIBRETRANSLATE_ENDPOINT") or libretranslate.DEFAULT_ENDPOINT
@@ -723,7 +723,7 @@ def _service_probe_spec(
             "kind": "libretranslate",
             "url": libretranslate._languages_url(_sanitize_url(str(endpoint))),
         }
-    if detail.startswith("gpu_orchestrator_workloads.qwen:"):
+    if detail.startswith("sparehour_workloads.qwen:"):
         base = str(environment.get("VLLM_BASE_URL") or "http://127.0.0.1:8000")
         served = environment.get("VLLM_SERVED_MODEL") or environment.get(
             "VLLM_MODEL_PACK"
@@ -740,7 +740,7 @@ def _run_probe_child(
     spec: dict[str, Any], *, stop: Any | None, deadline: float,
     cancelled: str, timed_out: str,
 ) -> dict[str, Any]:
-    """Run ``python -m dworker.dynamic`` as an owned JSON GET child.
+    """Run ``python -m sparehour_worker.dynamic`` as an owned JSON GET child.
 
     Same lifecycle contract as fetch_mod.run: the spec rides stdin (nothing
     URL- or token-derived reaches argv), the parent polls stop/deadline and
@@ -748,7 +748,7 @@ def _run_probe_child(
     returns — remote text never crosses the pipe.
     """
     proc = subprocess.Popen(
-        [sys.executable, "-m", "dworker.dynamic"],
+        [sys.executable, "-m", "sparehour_worker.dynamic"],
         stdin=subprocess.PIPE,
         stdout=subprocess.PIPE,
         stderr=subprocess.DEVNULL,
@@ -862,7 +862,7 @@ def _service_pack_ready(spec: dict[str, Any], stop: Any | None) -> tuple[bool, s
 
 
 def _json_probe_child_entry() -> int:
-    """Child entry for `python -m dworker.dynamic`: one bounded JSON GET."""
+    """Child entry for `python -m sparehour_worker.dynamic`: one bounded JSON GET."""
     try:
         spec = json.loads(sys.stdin.read())
         url = str(spec["url"])
@@ -872,7 +872,7 @@ def _json_probe_child_entry() -> int:
         if _credentialed(url):
             raise fetch_mod._Refused(f"refusing credentialed URL {_sanitize_url(url)!r}")
         request = urllib.request.Request(
-            url, headers={"User-Agent": "dworker-dynamic/1.0"}
+            url, headers={"User-Agent": "sparehour-worker-dynamic/1.0"}
         )
         opener = urllib.request.build_opener(
             urllib.request.HTTPSHandler(context=ssl.create_default_context()),
@@ -1395,11 +1395,11 @@ def plan(
 def _model_packs():
     """Lazy access to the shared hf-pack verifier/installer."""
     try:
-        from gpu_orchestrator_workloads import model_packs
+        from sparehour_workloads import model_packs
     except ImportError as exc:
         raise DynamicError(
-            "hf model packs need gpu_orchestrator_workloads.model_packs "
-            "(upgrade the installed distributed-gpu wheel)"
+            "hf model packs need sparehour_workloads.model_packs "
+            "(upgrade the installed sparehour wheel)"
         ) from exc
     return model_packs
 
@@ -1478,7 +1478,7 @@ def _download(url: str, destination: Path, *, stop: Any | None) -> None:
 
 def install_pack(lock: dict[str, Any], target: Path, *, stop: Any | None = None) -> None:
     """Format-dispatched install: ``format: huggingface`` locks download a
-    pinned HF snapshot via gpu_orchestrator_workloads.model_packs; anything
+    pinned HF snapshot via sparehour_workloads.model_packs; anything
     else is the legacy Argos archive path."""
     if str(lock.get("format") or "argos") == "huggingface":
         mp = _model_packs()
@@ -1717,7 +1717,7 @@ def manage_cycle(runtime: Any, stop: Any | None = None, *, _cache: dict[str, Any
 def manager_loop(
     runtime: Any, stop: Any | None = None, *, catalog_refresh_seconds: float = 3600.0
 ) -> None:
-    """Background loop behind `dworker run` when config dynamic=true."""
+    """Background loop behind `sparehour-worker run` when config dynamic=true."""
     if stop is None:
         stop = getattr(runtime, "stop", None)
     if stop is None:

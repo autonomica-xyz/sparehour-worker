@@ -1,7 +1,7 @@
 """Owned one-shot fetch child for the dynamic manager.
 
 Every remote read the dynamic mode needs — a lock catalog, a pack archive,
-or an endpoint reachability HEAD — runs as ``sys.executable -m dworker.fetch``
+or an endpoint reachability HEAD — runs as ``sys.executable -m sparehour_worker.fetch``
 inside its own subprocess. Process termination is the cancellation
 mechanism: DNS, TCP connect, TLS handshake, headers, and a trickled body
 can all park inside the OS where no in-process interrupt reaches them, but
@@ -143,7 +143,7 @@ def _main() -> int:
     request = urllib.request.Request(
         url,
         method="HEAD" if kind == "probe" else "GET",
-        headers={"User-Agent": "dworker-dynamic/1.0"},
+        headers={"User-Agent": "sparehour-worker-dynamic/1.0"},
     )
     # Verified TLS: the default context does cert+hostname checks and honors
     # SSL_CERT_FILE/SSL_CERT_DIR for site trust anchors.
@@ -195,7 +195,7 @@ def run(spec: dict, *, stop=None, deadline: float, cancelled: str,
     classified JSON, never raw remote text.
     """
     proc = subprocess.Popen(
-        [sys.executable, "-m", "dworker.fetch"],
+        [sys.executable, "-m", "sparehour_worker.fetch"],
         stdin=subprocess.PIPE,
         stdout=subprocess.PIPE,
         stderr=subprocess.DEVNULL,
