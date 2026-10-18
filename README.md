@@ -206,6 +206,12 @@ Key config keys: `capabilities` (empty claims nothing), `cpu_slots`,
 
 ## Known ceilings
 
+- Job-level failures — for example a translation job requesting a language
+  pair the local LibreTranslate hasn't loaded, or bad job input — are reported
+  to the coordinator as failed jobs and the worker keeps running and claims
+  the next job. Worker-level faults (model server down, GPU context errors,
+  model load failures from other plugins) still drain: the running job is
+  reported failed and the worker stops claiming.
 - Capabilities are per-host, not per-GPU: a host advertises the same set
   on every slot.
 - Idle detection fails closed: an unclassifiable session or a platform
