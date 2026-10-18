@@ -14,7 +14,14 @@ complete lifecycle and the http/plugin executors). This module adds:
 - full joins of the inherited heartbeat/lease request workers before
   run() returns and before each job's terminal report — upstream only
   time-joins them, so without this a stalled request could outlive the
-  client or a late lease heartbeat could race complete/fail.
+  client or a late lease heartbeat could race complete/fail,
+- job-level vs worker-level execution-error classification: a job that
+  fails for its own reasons (e.g. the LibreTranslate plugin's readiness
+  probe finding no loaded model for the requested language pair) is
+  reported to the coordinator as a failed job and the worker keeps
+  claiming, while genuine worker-level faults (model server down, GPU
+  context corruption, plugin release failures, model load failures from
+  other plugins) still drain and stop the worker as upstream intends.
 """
 
 from __future__ import annotations
@@ -52,6 +59,60 @@ from .client import WorkerClient
 # container itself on cancellation/timeout (killing only the `docker run`
 # CLI would leave a detached container holding the GPU).
 _CONTAINER_PREFIX = "sparehour-"
+
+# Execution-error codes that describe the *job*, not the worker: the input,
+# the requested workload parameters, or the workload's own contract made
+# this attempt impossible. Upstream `AgentRunner._run_job` fails the job and
+# keeps the slot claiming; none of these are in upstream
+# DRAINING_EXECUTION_ERRORS (a unit test pins that disjointness). They are
+# listed here so the worker can annotate them and so future codes have an
+# explicit home.
+JOB_LEVEL_EXECUTION_ERRORS = frozenset(
+    {
+        "unsupported_language_pair",
+        "translation_rejected",
+        "degenerate_output",
+        "output_validation_failed",
+        "executor_contract_invalid",
+        "unsupported_option",
+        "executor_unsupported",
+    }
+)
+
+# Handler specs of the controller's LibreTranslate plugin executors. Their
+# /languages readiness probe reports a requested-but-unloaded language pair
+# as "model_load_failed" even though the service itself answered fine — the
+# worker is healthy, only that job's pair is missing. Upstream drains on
+# "model_load_failed", so the worker reclassifies it for these handlers only.
+_LIBRETRANSLATE_PLUGIN_HANDLERS = frozenset(
+    {
+        "sparehour_workloads.libretranslate:LibreTranslateExecutor",
+        "sparehour_workloads.libretranslate:LibreTranslateBatchExecutor",
+    }
+)
+
+
+def classify_execution_error(job: dict[str, Any], exc: ExecutionError) -> ExecutionError:
+    """Return the ExecutionError the coordinator should be told about.
+
+    Rule: "model_load_failed" raised by the LibreTranslate plugin executors
+    means the local service is up but has no model loaded for the requested
+    pair — a property of the job, not the worker — so it is reclassified to
+    the job-level code "unsupported_language_pair" (cause chained), which
+    upstream reports via ``client.fail`` without draining. Everything else
+    is returned unchanged, so genuine worker-level faults
+    (model_server_unavailable, cuda_context_failure, plugin_release_failed,
+    and model_load_failed from other plugins such as SDXL/transcription/
+    argos) still drain exactly as upstream intends.
+    """
+    if exc.code == "model_load_failed":
+        handler = str((job.get("executor") or {}).get("handler") or "")
+        if handler in _LIBRETRANSLATE_PLUGIN_HANDLERS:
+            reported = ExecutionError("unsupported_language_pair", str(exc))
+            reported.__cause__ = exc
+            return reported
+    return exc
+
 
 # Upper bound on one `docker pull` during prefetch; network stalls must not
 # pin the dashboard's prefetch worker (or `sparehour-worker prefetch`) forever.
@@ -457,7 +518,7 @@ class IdleGatedRunner(AgentRunner):
         workdir: Path,
         lease: Any,
     ) -> list[dict[str, Any]]:
-        """Track this job's lease worker, then run the inherited executor.
+        """Track this job's lease worker, classify errors, then run the executor.
 
         Upstream ``_run_job`` creates and starts the ``_LeaseKeeper`` just
         before dispatching here, and its worker thread is the only source of
@@ -465,9 +526,27 @@ class IdleGatedRunner(AgentRunner):
         terminal-report fence the actual thread/stop event to join — no
         per-job tombstone needed and the bookkeeping is reclaimed when the
         joined worker provably cannot heartbeat again.
+
+        ExecutionError is classified through
+        ``classify_execution_error`` before it propagates: job-level failures
+        (e.g. an unsupported language pair) are re-coded so upstream
+        ``_run_job`` reports them via ``client.fail`` and keeps the worker
+        claiming, while worker-level faults pass through and drain.
         """
         self.client.track_lease(lease)
-        return super()._execute(slot, job, workdir, lease)
+        try:
+            return super()._execute(slot, job, workdir, lease)
+        except ExecutionError as exc:
+            reported = classify_execution_error(job, exc)
+            if reported.code in JOB_LEVEL_EXECUTION_ERRORS:
+                # Bounded, token-free line for the dashboard/operator: code
+                # and ids only. ``_slot_loop`` still counts the attempt via
+                # the outcome client.
+                self.status.note(
+                    f"slot {slot.id}: job {job.get('id')} failed: "
+                    f"{reported.code} (worker keeps running)"
+                )
+            raise reported
 
     # -- process/container executor --------------------------------------
 
